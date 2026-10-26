@@ -3,8 +3,7 @@ import time
 import threading
 import requests
 from flask import Flask, render_template_string, jsonify
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone, timedelta
 
 PAGE_ID = os.environ.get("PAGE_ID")
 PAGE_TOKEN = os.environ.get("PAGE_TOKEN")
@@ -12,9 +11,9 @@ FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY")
 headers = {"x-apisports-key": FOOTBALL_API_KEY}
 
 app = Flask(__name__)
-EAT = pytz.timezone('Africa/Nairobi')
+# EAT is UTC+3 - No pytz needed!
+EAT = timezone(timedelta(hours=3))
 
-# ALL LEAGUES - No flags to avoid hidden unicode
 ALL_LEAGUES = {
     276: "KPL Kenya",
     390: "Linafoot DRC",
@@ -215,10 +214,9 @@ body{background:#080808;color:#fff;font-family: -apple-system, BlinkMacSystemFon
 {% endfor %}
 
 <div class="footer">
-<p>V13 Final - Auto Switch: Uses 100/100 API-Football first, then LiveScore Free Unlimited</p>
+<p>V13.1 Final - No pytz - Auto Switch: 100 API-Football then LiveScore Free</p>
 <p>Kickoff and Lineups use FREE sources - 0 requests from your 100</p>
 <p>Install this site as App: Chrome menu > Add to Home Screen</p>
-<p>Beats FlashScore on African Leagues coverage</p>
 </div>
 </div>
 
@@ -241,7 +239,7 @@ def home():
 
 def bot_loop():
     global requests_used, current_day
-    print("V13 FINAL BEAST STARTED - 1:30 PM EAT, PWA Enabled, No hidden unicode")
+    print("V13.1 FINAL BEAST STARTED - NO PYTZ - 1:30 PM EAT")
     while True:
         try:
             now = datetime.now(EAT)

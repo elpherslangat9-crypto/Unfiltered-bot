@@ -1,126 +1,235 @@
-import requests, time, os, json, random
+import requests
+import json
+import os
+import time
+import random
 from datetime import datetime
 
-PAGE_ID = os.environ.get("PAGE_ID")
-PAGE_TOKEN = os.environ.get("PAGE_TOKEN")
+# --- KEYS FROM RENDER ---
+PAGE_ID = os.getenv("PAGE_ID")
+PAGE_TOKEN = os.getenv("PAGE_TOKEN")
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 LAST_FILE = "last_scores.json"
+REQUEST_FILE = "requests_today.json"
 
-# BEAT MatchCorner - Priority leagues only (no boring leagues spam)
-TOP_LEAGUES = [7, 8, 17, 35, 1, 14, 679, 17015] # EPL, LaLiga, UCL, Bundesliga, etc
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0"}
+# --- 13 AFRICAN LEAGUES - NEVER MISS! ---
+AFRICAN_LEAGUES = {
+    525: {"name": "Linafoot DRC 🇨🇩", "lang": "congo", "tags": "#Linafoot #RDC #FootRDC #LinafootRDC #VitaClub #TPMazembe #Lupopo #CongoFootball #Kinshasa #Ligue1RDC"},
+    332: {"name": "KPL Kenya 🇰🇪", "lang": "kenya", "tags": "#KPL #KenyaPremierLeague #FKFPL #GorMahia #AFCLeopards #KenyaFootball #Nairobi #HarambeeStars #KPLLive #Kenyans"},
+    378: {"name": "NBC Tanzania 🇹🇿", "lang": "swahili", "tags": "#NBCPremierLeague #LigiKuu #SimbaSC #YangaSC #TanzaniaFootball #DarEsSalaam #LigiKuuTanzania #AzamFC"},
+    390: {"name": "UPL Uganda 🇺🇬", "lang": "english", "tags": "#UPL #UgandaPremierLeague #VipersSC #KCCA #SCVilla #UgandaFootball #Kampala #StarTimesUPL"},
+    288: {"name": "PSL South Africa 🇿🇦", "lang": "english", "tags": "#PSL #DStvPrem #KaizerChiefs #OrlandoPirates #MamelodiSundowns #SouthAfrica #Bafana #PSLLive"},
+    393: {"name": "Zambia Super League 🇿🇲", "lang": "english", "tags": "#ZambiaSuperLeague #ZPL #ZambiaFootball #ZescoUnited #PowerDynamos #Lusaka"},
+    200: {"name": "Botola Morocco 🇲🇦", "lang": "french", "tags": "#Botola #BotolaPro #Wydad #RajaCasablanca #MoroccoFootball #Maroc"},
+    233: {"name": "Egypt Premier 🇪🇬", "lang": "english", "tags": "#EgyptianPremierLeague #AlAhly #Zamalek #EgyptFootball #Cairo"},
+    341: {"name": "Nigeria NPFL 🇳🇬", "lang": "english", "tags": "#NPFL #NigeriaPremierLeague #Enyimba #KanoPillars #NaijaFootball #Lagos"},
+    235: {"name": "Algeria Ligue 1 🇩🇿", "lang": "french", "tags": "#Ligue1Algeria #AlgeriaFootball #MCA #USMA #Alger"},
+    323: {"name": "Ghana Premier 🇬🇭", "lang": "english", "tags": "#GhanaPremierLeague #GPL #HeartsOfOak #Kotoko #GhanaFootball"},
+    12: {"name": "CAF Champions League 🏆", "lang": "english", "tags": "#CAFCL #CAFChampionsLeague #TotalEnergiesCAFCL #AfricanFootball"},
+    14: {"name": "CAF Confederation Cup", "lang": "english", "tags": "#CAFCC #CAFConfederationCup #Africa"},
+}
+
+CONGO_CAPS = [
+    "BUUUUT! ⚽ {p} a tiye na {s} {m}'",
+    "Tshibiiii ya goal! {p} vient de marquer! {s} {m}' 🔥",
+    "GOAL na Linafoot! {p} {s} {m}' - Bino bozali wapi?",
+    "Eeeeeh! {p} a bimisi {s}! {l} {m}'",
+    "MOKONZI A TIE! {p} {s} {m}' 🇨🇩🔥"
+]
+SWAHILI_CAPS = [
+    "GOLI! ⚽ {p} ameifunga! {s} {m}'",
+    "WAMEFUNGWA! {p} {s} - {l} {m}'",
+    "BAO! {p} kaweka {s} {m}' 🔥",
+    "Imekwisha! {p} amefunga {s} {m}'",
+    "Goli la dakika ya {m}'! {p} {s}"
+]
+ENGLISH_CAPS = [
+    "GOAL! {p} scores! {s} {m}' ⚽🔥",
+    "What a goal! {p} {s} - {l} {m}'",
+    "BOOM! {p} {s} {m}'",
+    "Goal alert! {p} makes it {s} {m}'"
+]
+FRENCH_CAPS = [
+    "BUT! {p} marque! {s} {m}' ⚽",
+    "Goal! {p} {s} - {l} {m}' 🔥",
+    "Incroyable! {p} vient de marquer {s} {m}'"
+]
 
 def load_last():
     try:
-        with open(LAST_FILE, "r") as f: return json.load(f)
-    except: return {}
+        with open(LAST_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-def save_last(d):
-    with open(LAST_FILE, "w") as f: json.dump(f, d)
+def save_last(data):
+    with open(LAST_FILE, "w") as f:
+        json.dump(data, f)
 
-def fb_post(msg):
-    url = f"https://graph.facebook.com/v19.0/{PAGE_ID}/feed"
-    data = {"message": msg, "access_token": PAGE_TOKEN}
-    r = requests.post(url, data=data)
-    print(f"FB: {r.text[:200]}")
-    # Anti-block: random sleep 45-90 sec after post
-    time.sleep(random.randint(45,90))
-    return r
-
-def get_live():
+def get_request_count():
     try:
-        url = "https://api.sofascore.com/api/v1/sport/football/events/live"
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        return r.json().get("events", [])
+        with open(REQUEST_FILE, "r") as f:
+            data = json.load(f)
+            if data.get("date") != datetime.now().strftime("%Y-%m-%d"):
+                return 0
+            return data.get("count", 0)
+    except:
+        return 0
+
+def increment_request():
+    count = get_request_count() + 1
+    with open(REQUEST_FILE, "w") as f:
+        json.dump({"date": datetime.now().strftime("%Y-%m-%d"), "count": count}, f)
+    print(f"📊 API Requests today: {count}/100")
+    return count
+
+def post_fb(message, tags):
+    if not PAGE_ID or not PAGE_TOKEN:
+        print("❌ Missing PAGE_ID or PAGE_TOKEN in Render!")
+        return False
+    viral_extra = " #FootballLive #LiveScore #GoalAlert #AfricanFootball #UnfilteredFootball #FYP #FootballAfrica #Live"
+    full_message = message + "\n\n" + tags + viral_extra
+    try:
+        url = f"https://graph.facebook.com/{PAGE_ID}/feed"
+        data = {"message": full_message, "access_token": PAGE_TOKEN}
+        r = requests.post(url, data=data, timeout=20).json()
+        if "id" in r:
+            print(f"✅ POSTED: {message[:60]}...")
+            return True
+        else:
+            print(f"❌ FB FAILED: {r}")
+            return False
     except Exception as e:
-        print(f"API Error: {e}")
-        return []
+        print(f"❌ FB Error: {e}")
+        return False
 
-def get_incidents(event_id):
+def check_african_leagues():
+    print(f"\n--- Checking African leagues {datetime.now()} ---")
+    if not FOOTBALL_API_KEY:
+        print("❌ No FOOTBALL_API_KEY found in Render! Add it!")
+        return
+    last = load_last()
+    headers = {"x-apisports-key": FOOTBALL_API_KEY}
     try:
-        url = f"https://api.sofascore.com/api/v1/event/{event_id}/incidents"
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        return r.json().get("incidents", [])
-    except: return []
-
-print("🔥 UNFILTERED SCORES - MATCHCORNER KILLER STARTED!")
-last = load_last()
-
-while True:
-    events = get_live()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Checking {len(events)} live games")
-
-    for ev in events:
-        try:
-            tournament_id = ev.get("tournament", {}).get("id", 0)
-            # Filter: only Top leagues + any game with 2+ goals
-            home = ev["homeTeam"]["name"]
-            away = ev["awayTeam"]["name"]
-            hs = ev["homeScore"].get("current", 0)
-            aws = ev["awayScore"].get("current", 0)
-            minute = ev.get("time", {}).get("currentPeriodStartTimestamp", 0)
-            status = ev["status"]["type"]
-            event_id = ev["id"]
-            key = str(event_id)
-
-            current_state = f"{hs}-{aws}-{status}"
-
-            if last.get(key) == current_state:
-                continue # No change, skip
-
-            # --- GOAL DETECTION (BETTER THAN MATCHCORNER) ---
-            if last.get(key) and last[key].split("-")[0] != str(hs) or last[key].split("-")[1] != str(aws) or key not in last:
-                if status == "inprogress" and (hs + aws > 0):
-                    # Try get scorer
-                    scorer = ""
-                    incidents = get_incidents(event_id)
-                    for inc in reversed(incidents[-3:]):
-                        if inc.get("incidentType") == "goal":
-                            scorer = inc.get("player", {}).get("name", "")
-                            goal_min = inc.get("time", 0)
-                            is_home = inc.get("isHome", True)
-                            scorer_text = f"\n⚽ Scorer: {scorer} ({goal_min}' )" if scorer else f"\n⏱️ {goal_min}'"
-                            team_scored = home if is_home else away
+        url = "https://v3.football.api-sports.io/fixtures?live=all"
+        response = requests.get(url, headers=headers, timeout=20)
+        increment_request()
+        data = response.json()
+        found = 0
+        for fx in data.get("response", []):
+            league_id = fx["league"]["id"]
+            if league_id not in AFRICAN_LEAGUES:
+                continue
+            found += 1
+            fixture_id = str(fx["fixture"]["id"])
+            home_goals = fx["goals"]["home"]
+            away_goals = fx["goals"]["away"]
+            if home_goals is None or away_goals is None:
+                continue
+            current_score = f"{home_goals}-{away_goals}"
+            if last.get(fixture_id) == current_score:
+                continue
+            if last.get(fixture_id):
+                minute = fx["fixture"]["status"]["elapsed"]
+                if minute is None:
+                    minute = "Live"
+                home_team = fx["teams"]["home"]["name"]
+                away_team = fx["teams"]["away"]["name"]
+                scorer_name = home_team
+                try:
+                    event_url = f"https://v3.football.api-sports.io/fixtures/events?fixture={fixture_id}"
+                    event_res = requests.get(event_url, headers=headers, timeout=10).json()
+                    increment_request()
+                    events = event_res.get("response", [])
+                    for ev in reversed(events):
+                        if ev["type"] == "Goal":
+                            scorer_name = ev["player"]["name"]
                             break
+                except Exception as e:
+                    print(f"Could not get scorer: {e}")
+                info = AFRICAN_LEAGUES[league_id]
+                lang = info["lang"]
+                if lang == "congo":
+                    template = random.choice(CONGO_CAPS)
+                elif lang == "swahili":
+                    template = random.choice(SWAHILI_CAPS)
+                elif lang == "kenya":
+                    if random.random() < 0.8:
+                        template = random.choice(ENGLISH_CAPS)
                     else:
-                        scorer_text = ""
-                        team_scored = home if hs > int(last.get(key, "0-0-inprogress").split("-")[0]) else away
-
-                    msg = f"🚨 GOAL ALERT! 🚨\n\n{home} {hs} - {aws} {away}{scorer_text}\n\n🔥 {team_scored} takes the lead!\n⏱️ LIVE - {ev.get('status', {}).get('description', 'LIVE')}\n\n#UnfilteredScores #Live #Football #GOAL"
-
-                    fb_post(msg)
-                    print(f"GOAL POSTED: {home} {hs}-{aws} {away}")
-
-            # --- HALF TIME ---
-            if status == "halftime" and "halftime" not in last.get(key, ""):
-                msg = f"⏸️ HALF TIME\n\n{home} {hs} - {aws} {away}\n\nWhat a first half! Thoughts? 👇\n\n#HT #UnfilteredScores"
-                fb_post(msg)
-
-            # --- FULL TIME ---
-            if status == "finished" and "finished" not in last.get(key, ""):
-                winner = home if hs > aws else away if aws > hs else "DRAW!"
-                msg = f"🏁 FULL TIME RESULT\n\n{home} {hs} - {aws} {away}\n\nWinner: {winner} 🔥\n\nDid your team win? Comment! 👇\n\n#FT #UnfilteredScores #Results"
-                fb_post(msg)
-
-            # --- RED CARD ---
-            incidents = get_incidents(event_id) if key not in last else []
-            for inc in incidents[-1:]:
-                if inc.get("incidentType") == "card" and inc.get("incidentClass") == "red":
-                    player = inc.get("player", {}).get("name", "Player")
-                    msg = f"🟥 RED CARD!\n\n{home} vs {away}\n{player} SENT OFF! {inc.get('time', 0)}'\n\nScore: {hs} - {aws}\n\nGame changed! 😱\n\n#RedCard #UnfilteredScores"
-                    fb_post(msg)
-
-            last[key] = current_state
+                        template = random.choice(SWAHILI_CAPS)
+                elif lang == "french":
+                    template = random.choice(FRENCH_CAPS)
+                else:
+                    template = random.choice(ENGLISH_CAPS)
+                msg = template.format(p=scorer_name, s=f"{home_team} {home_goals}-{away_goals} {away_team}", m=minute, l=info["name"])
+                msg = msg + f"\n\n{info['name']} | {minute}'"
+                post_fb(msg, info["tags"])
+            last[fixture_id] = current_score
             save_last(last)
+        print(f"Found {found} African live games")
+    except Exception as e:
+        print(f"African check error: {e}")
 
+def check_big_leagues_free():
+    print("--- Checking Big leagues FREE (No API count) ---")
+    last = load_last()
+    espn_leagues = {
+        "eng.1": "Premier League",
+        "esp.1": "La Liga",
+        "ita.1": "Serie A",
+        "ger.1": "Bundesliga",
+        "uefa.champions": "Champions League"
+    }
+    for esp_id, league_name in espn_leagues.items():
+        try:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{esp_id}/scoreboard"
+            res = requests.get(url, timeout=15).json()
+            for event in res.get("events", []):
+                state = event["status"]["type"]["state"]
+                if state != "in":
+                    continue
+                fixture_id = event["id"]
+                comp = event["competitions"][0]
+                home_team = comp["competitors"][0]["team"]["displayName"]
+                away_team = comp["competitors"][1]["team"]["displayName"]
+                home_goals = int(comp["competitors"][0]["score"])
+                away_goals = int(comp["competitors"][1]["score"])
+                current_score = f"{home_goals}-{away_goals}"
+                if last.get(fixture_id) == current_score:
+                    continue
+                if last.get(fixture_id):
+                    minute = event["status"]["displayClock"]
+                    scorer = f"{home_team} player"
+                    msg_template = random.choice(ENGLISH_CAPS)
+                    msg = msg_template.format(p=scorer, s=f"{home_team} {home_goals}-{away_goals} {away_team}", m=minute, l=league_name)
+                    msg = msg + f"\n\n{league_name} | {minute}"
+                    tags = f"#{league_name.replace(' ', '')} #Football #LiveScore"
+                    post_fb(msg, tags)
+                last[fixture_id] = current_score
+                save_last(last)
         except Exception as e:
-            print(f"Loop error: {e}")
-            continue
+            print(f"Big league {esp_id} error: {e}")
 
-    # Clean old finished games (keep file small)
-    if len(last) > 200:
-        last = {k:v for k,v in list(last.items())[-100:]}
-        save_last(last)
-
-    wait = random.randint(70, 110) # Human-like 70-110 sec - BEATS spam filter
-    print(f"Sleeping {wait}s...")
-    time.sleep(wait)
+if __name__ == "__main__":
+    print("🔥 V8 PERFECT BEAST - KPL 80% English 20% Swahili!")
+    while True:
+        try:
+            hour = datetime.now().hour
+            req_count = get_request_count()
+            if req_count >= 95:
+                print("⚠️ 95 requests used today! Sleeping 15 mins to save")
+                time.sleep(900)
+                continue
+            if 11 <= hour <= 23:
+                check_african_leagues()
+                time.sleep(10)
+                check_big_leagues_free()
+                print("Sleeping 7 mins... (90 requests/day safe)")
+                time.sleep(420)
+            else:
+                print(f"😴 {hour}h - Sleeping 15 mins, saving API requests")
+                time.sleep(900)
+        except Exception as e:
+            print(f"Main loop error: {e}")
+            time.sleep(60)

@@ -1,63 +1,45 @@
-import os, time, threading, requests
+import os, time, threading, requests, urllib.parse
 from flask import Flask, render_template_string, jsonify, request, Response
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 app = Flask(__name__)
 
-# --- YOUR KEYS - Add these in Render Environment ---
 PAGE_ID = os.environ.get("PAGE_ID")
 PAGE_TOKEN = os.environ.get("PAGE_TOKEN")
 FOOTBALL_API_KEY = os.environ.get("FOOTBALL_API_KEY")
-
-# NEW: Telegram + WhatsApp - Add in Render!
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")  # From @BotFather
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "@unfiltered_scores")
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")  # From Meta Developers
-WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID")
-WHATSAPP_CHANNEL_ID = os.environ.get("WHATSAPP_CHANNEL_ID") # For WhatsApp Channels
+# WhatsApp Channel - YOUR LINK
+WHATSAPP_CHANNEL_LINK = "https://whatsapp.com/channel/0029VbDuzqxDTkK483zi3h0m"
 
 headers = {"x-apisports-key": FOOTBALL_API_KEY} if FOOTBALL_API_KEY else {}
 EAT = timezone(timedelta(hours=3))
 cache = {}
-posted = set()  # Smart duplicate check!
+posted = set()
+LATEST_GOALS = []  # For WhatsApp page
 
-# --- SMART POSTING TO ALL CHANNELS ---
 def post_all_channels(msg):
-    """Post 1 message to Telegram + WhatsApp + Facebook - SMART!"""
-    # 1. Telegram
+    # 1. Telegram - WORKS
     try:
         if TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             requests.post(url, data={"chat_id": TELEGRAM_CHANNEL_ID, "text": msg}, timeout=10)
-            print(f"Posted to Telegram: {msg[:50]}")
+            print(f"Posted Telegram: {msg[:50]}")
+            # Save for WhatsApp Channel page
+            LATEST_GOALS.insert(0, {"time": datetime.now(EAT).strftime("%H:%M"), "msg": msg})
+            if len(LATEST_GOALS) > 30:
+                LATEST_GOALS.pop()
     except Exception as e:
         print(f"Telegram error: {e}")
-
     # 2. Facebook
     try:
         if PAGE_ID and PAGE_TOKEN:
             url = f"https://graph.facebook.com/{PAGE_ID}/feed"
             requests.post(url, data={"message": msg, "access_token": PAGE_TOKEN}, timeout=10)
-            print(f"Posted to FB")
     except: pass
 
-    # 3. WhatsApp Cloud API (Channel)
-    try:
-        if WHATSAPP_TOKEN and WHATSAPP_PHONE_ID:
-            # For WhatsApp Channels, you need community API - simplified
-            url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
-            # This is for WhatsApp Business - for Channels we use same FB Graph
-            # If you have WhatsApp Channel ID, posting is via FB Graph
-            if WHATSAPP_CHANNEL_ID:
-                fb_url = f"https://graph.facebook.com/{WHATSAPP_CHANNEL_ID}/messages"
-                requests.post(fb_url, json={"message": msg}, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, timeout=10)
-            print(f"Posted to WhatsApp")
-    except Exception as e:
-        print(f"WhatsApp error: {e}")
-
 def fetch_by_date(date_str):
-    # LITE MODE: Cache 5 mins = 90% less API calls = 90% less data!
     if date_str in cache and time.time() - cache[date_str][0] < 300:
         return cache[date_str][1]
     data = []
@@ -85,22 +67,17 @@ def group_by_country(fixtures):
 @app.route('/api/day')
 def api_day():
     date_str = request.args.get('date')
-    search = request.args.get('search','').lower()  # NEW: Search!
+    search = request.args.get('search','').lower()
     if not date_str:
         date_str = datetime.now(EAT).strftime("%Y-%m-%d")
     fixtures = fetch_by_date(date_str)
-    
-    # NEW: Smart Search - Filter by team/league
     if search:
         fixtures = [f for f in fixtures if search in f['teams']['home']['name'].lower() or search in f['teams']['away']['name'].lower() or search in f['league']['name'].lower() or search in f['league'].get('country','').lower()]
-    
     fixtures.sort(key=lambda f: f['fixture']['date'])
     grouped = group_by_country(fixtures)
     out = []
     for country, leagues in grouped.items():
         out.append({"country": country, "leagues": leagues})
-    
-    # Smart Priority - KPL Kenya first! Your idea!
     def country_priority(c):
         name = c['country'].lower()
         if 'kenya' in name: return 0
@@ -132,6 +109,27 @@ def manifest():
 @app.route('/sw.js')
 def sw():
     return Response("self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());", mimetype='application/javascript')
+
+# NEW: WORKING WhatsApp Channel Page for YOUR channel
+@app.route('/whatsapp')
+def whatsapp_page():
+    html_head = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WhatsApp Poster - Unfiltered</title>
+    <style>body{{background:#000;color:#fff;font-family:Arial;padding:15px}} .goal{{background:#111;border-left:3px solid #25D366;padding:12px;margin:12px 0;border-radius:10px}} .btn{{background:#25D366;color:#000;padding:10px 18px;border-radius:25px;text-decoration:none;display:inline-block;font-weight:bold;margin:4px;font-size:13px}} .top{{background:#075E54;padding:15px;border-radius:12px;text-align:center}}</style>
+    </head><body>
+    <div class="top"><h2>📲 UNFILTERED SCORES</h2><p>Your WhatsApp Channel</p><p style="font-size:12px;word-break:break-all">{WHATSAPP_CHANNEL_LINK}</p><br><a class="btn" style="background:#fff" href="{WHATSAPP_CHANNEL_LINK}" target="_blank">Open WhatsApp Channel</a></div>
+    <h3 style="margin:15px 0;color:#25D366">Latest Goals - Tap to Post:</h3>
+    """
+    body = ""
+    if not LATEST_GOALS:
+        body = "<p style='color:#666;text-align:center;margin:40px'>No goals yet today.<br>When bot posts to Telegram, it will appear here for 1-tap WhatsApp post!</p>"
+    for g in LATEST_GOALS:
+        enc = urllib.parse.quote(g['msg'])
+        wa_link = f"https://wa.me/?text={enc}"
+        safe = g['msg'].replace('`','').replace("'", "")
+        body += f"""<div class="goal"><div style="font-size:11px;color:#888">{g['time']} EAT</div><div style="margin:8px 0;white-space:pre-wrap">{g['msg']}</div><a class="btn" href="{wa_link}" target="_blank">📲 Share to WhatsApp</a><a class="btn" style="background:#39FF14" onclick="navigator.clipboard.writeText(`{safe}`);alert('Copied! Paste in Channel')">📋 Copy for Channel</a></div>"""
+    return render_template_string(html_head + body + "</body></html>")
 
 HTML = """
 <!DOCTYPE html>
@@ -173,15 +171,20 @@ body{background:#000;color:#fff;font-family:Roboto,Arial,sans-serif}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(57,255,20,0.4)}70%{box-shadow:0 0 0 8px rgba(57,255,20,0)}100%{box-shadow:0 0 0 0 rgba(57,255,20,0)}}
 .empty{padding:40px 20px;text-align:center;color:#666}
 .lite-badge{background:#39FF14;color:#000;font-size:10px;padding:2px 6px;border-radius:10px;margin-left:8px}
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#0a0a0a;border-top:1px solid #1a1a1a;display:flex;justify-content:space-around;padding:8px 0}
+.bottom-nav div{text-align:center;font-size:10px;color:#666;cursor:pointer}
+.bottom-nav div.active{color:#39FF14}
 </style>
 </head>
 <body>
 <div class="top">
 <div class="logo-bar"><img src="/icon.svg"><h1>UNFILTERED <span class="lite-badge">V14.1 LITE</span></h1><span id="total">Loading...</span></div>
-<div class="search-bar"><input type="text" id="searchInput" placeholder="Search team, league, country... e.g. Gor Mahia, KPL, Arsenal" onkeyup="if(event.key==='Enter') doSearch()"><button onclick="doSearch()" style="background:#39FF14;color:#000;border:none;padding:10px 16px;border-radius:20px;font-weight:bold">Search</button></div>
+<div class="search-bar"><input type="text" id="searchInput" placeholder="Search Gor Mahia, KPL, Arsenal..." onkeyup="if(event.key==='Enter') doSearch()"><button onclick="doSearch()" style="background:#39FF14;color:#000;border:none;padding:10px 16px;border-radius:20px;font-weight:bold">Search</button></div>
 <div class="days" id="days"></div>
 </div>
-<div class="content" id="content"><div class="empty">Loading fixtures... Lite Mode ON - 90% less data</div></div>
+<div class="content" id="content"><div class="empty">Loading fixtures... Lite Mode ON</div></div>
+<div style="height:70px"></div>
+<div class="bottom-nav"><div class="active">Scores</div><div style="color:#25D366" onclick="window.open('/whatsapp','_blank')">📲 WhatsApp Channel</div><div>Live</div><div>News</div></div>
 <script>
 const EAT = 'Africa/Nairobi';
 let currentDate = new Date().toLocaleDateString('en-CA', {timeZone: EAT});
@@ -204,14 +207,13 @@ async function loadDay(date, el){
   try{
     let url='/api/day?date='+date; if(currentSearch) url+='&search='+encodeURIComponent(currentSearch);
     let r=await fetch(url); let j=await r.json();
-    document.getElementById('total').innerText=j.count+' matches' + (j.lite ? ' • LITE' : '');
+    document.getElementById('total').innerText=j.count+' matches • LITE';
     if(j.count==0){ document.getElementById('content').innerHTML=`<div class="empty"><b>No games found</b><br>${currentSearch ? 'No results for '+currentSearch : 'No games on '+date}</div>`; return; }
     let html=''; j.countries.forEach(c=>{ c.leagues.forEach(l=>{ html+=`<div class="country"><div class="country-head">${c.country}</div><div class="league"><div class="league-head"><span>${l.league}</span><span>${l.games.length}</span></div>`; l.games.forEach(g=>{ let time = toEATTime(g.fixture.date); let isLive = (g.fixture.status.short=='1H'||g.fixture.status.short=='2H'||g.fixture.status.short=='HT'); let home=g.teams.home.name; let away=g.teams.away.name; let scoreH=g.goals.home; let scoreA=g.goals.away; let scoreText=(scoreH!=null&&scoreA!=null)? `${scoreH} - ${scoreA}`: time; html+=`<div class="match"><div class="time">${time||'FT'}</div><div class="teams"><div>${home}</div><div>${away}</div></div><div class="score ${isLive?'live':''}">${scoreText}</div></div>`; }); html+=`</div></div>`; }); });
     document.getElementById('content').innerHTML=html;
   }catch(e){ document.getElementById('content').innerHTML='<div class="empty">Failed. Try again.</div>'; }
 }
 renderDays(); loadDay(currentDate);
-// LITE MODE: Refresh every 15 sec only - saves data!
 setInterval(()=>loadDay(currentDate), 15000);
 </script>
 </body>
@@ -223,11 +225,10 @@ def home():
     return render_template_string(HTML)
 
 def smart_bot():
-    print("V14.1 SMART BOT Started - Telegram + FB + WhatsApp")
+    print("V14.1 SMART BOT - Telegram + WhatsApp Channel Ready")
     while True:
         try:
             now = datetime.now(EAT)
-            # Only post after 1pm Kenya
             if now.hour < 13 or (now.hour==13 and now.minute<30):
                 time.sleep(300); continue
             today = now.strftime("%Y-%m-%d")
@@ -237,16 +238,15 @@ def smart_bot():
                 hg, ag = f['goals']['home'], f['goals']['away']
                 if hg is None: continue
                 gid = f"{fid}-{hg}-{ag}"
-                # Smart duplicate check - post only once!
                 if gid not in posted and (hg+ag)>0:
                     posted.add(gid)
                     league = f['league']['name']
                     home = f['teams']['home']['name']
                     away = f['teams']['away']['name']
                     minute = f['fixture']['status'].get('elapsed','')
-                    msg = f"⚽ UNFILTERED SCORES\n\nGOAL! {home} {hg}-{ag} {away} {minute}'\n\n🏆 {league}\n\nLive: unfiltered-scores.vercel.app"
+                    msg = f"⚽ UNFILTERED SCORES\\n\\nGOAL! {home} {hg}-{ag} {away} {minute}'\\n\\n🏆 {league}\\n\\nLive: unfiltered-scores.vercel.app\\nWhatsApp: {WHATSAPP_CHANNEL_LINK}"
                     post_all_channels(msg)
-            time.sleep(60)  # Check every 60 sec = LITE!
+            time.sleep(60)
         except Exception as e:
             print(e); time.sleep(60)
 

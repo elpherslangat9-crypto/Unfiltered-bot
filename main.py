@@ -4,6 +4,24 @@ import os
 import time
 import random
 from datetime import datetime
+from flask import Flask
+import threading
+
+# --- FAKE WEB SERVER FOR RENDER FREE TIER (DO NOT DELETE) ---
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "🟢 Unfiltered Football Bot is LIVE! - African Leagues + Big Leagues"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+threading.Thread(target=run_web, daemon=True).start()
+# --- END WEB SERVER ---
+
+# --- YOUR BRAND 🟢 ---
+BRAND = "🟢 Unfiltered Football"
 
 # --- KEYS FROM RENDER ---
 PAGE_ID = os.getenv("PAGE_ID")
@@ -88,7 +106,8 @@ def post_fb(message, tags):
         print("❌ Missing PAGE_ID or PAGE_TOKEN in Render!")
         return False
     viral_extra = " #FootballLive #LiveScore #GoalAlert #AfricanFootball #UnfilteredFootball #FYP #FootballAfrica #Live"
-    full_message = message + "\n\n" + tags + viral_extra
+    # --- BRAND 🟢 ADDED AT START OF EVERY POST ---
+    full_message = f"{BRAND}\n\n{message}\n\n{tags}{viral_extra}"
     try:
         url = f"https://graph.facebook.com/{PAGE_ID}/feed"
         data = {"message": full_message, "access_token": PAGE_TOKEN}
@@ -212,7 +231,7 @@ def check_big_leagues_free():
             print(f"Big league {esp_id} error: {e}")
 
 if __name__ == "__main__":
-    print("🔥 V8 PERFECT BEAST - KPL 80% English 20% Swahili!")
+    print("🔥 V8 PERFECT BEAST - KPL 80% English 20% Swahili! | 🟢 BRAND + FREE WEB SERVER ACTIVE")
     while True:
         try:
             hour = datetime.now().hour

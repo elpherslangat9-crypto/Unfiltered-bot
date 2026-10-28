@@ -1,4 +1,4 @@
-name: V27 FB ONLY - FASTER THAN TV
+name: V29 FB LIVE EVERYTHING
 
 on:
   schedule:
@@ -8,30 +8,21 @@ on:
     branches: [ main ]
 
 concurrency:
-  group: unfiltered-fb-only
+  group: fb-live-v29
   cancel-in-progress: false
 
 jobs:
-  live-bot:
+  live:
     runs-on: ubuntu-latest
     timeout-minutes: 340
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install
-        run: pip install requests flask
-
-      - name: Run LIVE - Faster Than TV - FB ONLY
+      - run: pip install requests
+      - name: Run V29 GitHub -> Facebook
         env:
-          GITHUB_ACTIONS: "true"
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}

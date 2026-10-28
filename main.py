@@ -1,163 +1,170 @@
-import os,time,threading,requests,json,random,hashlib,re
-from flask import Flask,jsonify,request
-from datetime import datetime,timezone,timedelta
-from collections import defaultdict
-app=Flask(__name__);P=os.environ
-PID=P.get("PAGE_ID");PT=P.get("PAGE_TOKEN");KEY=P.get("FOOTBALL_API_KEY")
-TB=P.get("TELEGRAM_BOT_TOKEN");TC=P.get("TELEGRAM_CHANNEL_ID","@unfiltered_scores")
-H={"x-apisports-key":KEY} if KEY else {};EAT=timezone(timedelta(hours=3))
-C={};LC={};MS={};PD=set()
-PF="/tmp/posted.json"
-try:
- if os.path.exists(PF):PD=set(json.load(open(PF)))
-except:PD=set()
-def save(): 
- try:json.dump(list(PD),open(PF,"w"))
- except:pass
-def hsh(s):return hashlib.md5(s.encode()).hexdigest()[:10]
-def mkey(h,a,d):return f"{re.sub(r'\W+','',h.lower())[:8]}_{re.sub(r'\W+','',a.lower())[:8]}_{d[:10]}"
-def season():n=datetime.now();return n.year if n.month>=7 else n.year-1
-def is_congo(n):return "linafoot" in n.lower() or "congo" in n.lower() or "rdc" in n.lower()
+import os, json, time, threading, random, requests
+from flask import Flask
+from datetime import datetime
+import pytz
 
-# --- DYNAMIC HASHTAGS - ROTATES EVERY POST FOR NON-FOLLOWERS REACH ---
-TAG_POOLS=[
- ["#LiveScores","#FootballLive","#KenyaFootball","#KPLLive"],
- ["#FootballNews","#SoccerUpdates","#EPLLive","#LaLiga"],
- ["#Linafoot","#RDCFoot","#AfricanFootball","#CAF"],
- ["#GoalAlert","#MatchDay","#FootballKenya","#UnfilteredScores"],
- ["#UCL","#EuropaLeague","#FootballFans","#LiveMatch"],
- ["#GorMahia","#AFCLepards","#TuskerFC","#KPL"],
-]
-def get_tags(league):
-  base=random.choice(TAG_POOLS)
-  if "kenya" in league.lower() or "kpl" in league.lower():
-    base+=["#Kenya","#HarambeeStars"]
-  if is_congo(league):
-    base+=["#LinafootRDC","#VitaClub","#TPMazembe"]
-  if "england" in league.lower() or "premier" in league.lower():
-    base+=["#EPL","#PremierLeague"]
-  random.shuffle(base)
-  return " ".join(base[:4]) # Only 4 tags - FB hates many
+app = Flask(__name__)
+EAT = pytz.timezone("Africa/Nairobi")
 
-def post(m, league=""):
- mh=hsh(m)
- if mh in PD:return
- # TELEGRAM
- try:
-  if TB and TC:requests.post(f"https://api.telegram.org/bot{TB}/sendMessage",data={"chat_id":TC,"text":m},timeout=10)
- except:pass
- # FACEBOOK - DIRECT POST - NOW ALLOWED - NO RESTRICTION
- try:
-  if PID and PT:
-   # Keep it clean for visibility - NO LINK IN MAIN POST
-   fb=re.sub(r'https?://\S+',"",m).strip()
-   hook=random.choice(["What a moment! 👇","Who will win? Predict! 💬","Are you watching? ❤️","Tag a friend! 👇","Your prediction? 👇"])
-   if is_congo(league):
-     hook=random.choice(["Votre pronostic? 👇","Vous regardez? ❤️","Qui va gagner? 💬","Partagez! 👇"])
-   final=f"🟢 {fb}\n\n{hook}\n\n{get_tags(league)}\n\n🟢 Unfiltered Scores"
-   r=requests.post(f"https://graph.facebook.com/{PID}/feed",data={"message":final,"access_token":PT},timeout=15)
-   if r.status_code==200:
-     PD.add(mh);save()
-     # Comment with website name (not link) for reach
-     try:
-       pid=r.json().get("id","")
-       if pid:requests.post(f"https://graph.facebook.com/{pid}/comments",data={"message":"More live scores on unfiltered-scores.vercel.app - Follow us for every goal!","access_token":PT},timeout=10)
-     except:pass
-     print(f"FB POSTED: {league}")
-   else:print(f"FB FAIL {r.text}")
- except Exception as e:print(f"FB err {e}")
+API_KEY=os.getenv("API_FOOTBALL_KEY")
+TG_TOKEN=os.getenv("TG_TOKEN")
+TG_CHAT=os.getenv("TG_CHAT")
+FB_PAGE_ID=os.getenv("FB_PAGE_ID")
+FB_PAGE_TOKEN=os.getenv("FB_PAGE_TOKEN")
 
-def live_all(d):
- y=d.replace("-","")
- if y in LC and time.time()-LC[y][0]<45:return LC[y][1]
- try:
-  r=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={y}",timeout=8)
-  if r.status_code==200:
-   F=[]
-   for ev in r.json().get("events",[]):
+POSTED="/tmp/p21.json"
+USED={"c":0}
+def load():
+    try: return json.load(open(POSTED))
+    except: return {}
+posted=load()
+def save(): json.dump(posted, open(POSTED,"w"))
+
+# FB ONLY 6 leagues for 100k growth
+FB_ALLOW=["kenya","tanzania","nbc","ligi kuu","premier league","la liga","serie a","bundesliga","ligue 1","champions","uefa","england","spain","italy"]
+TZ=["tanzania","nbc","simba","yanga"]
+
+TAGS={
+ "ke": ["#KPL #GorMahia #KenyaFootball #LiveScores","#HarambeeStars #KPLLive #GoalAlert"],
+ "tz": ["#LigiKuu #SimbaSC #YangaSC #MpiraLive","#NBCPL #SokaLaBongo #GoliLaLeo #Tanzania"],
+ "eu": ["#EPL #UCL #LaLiga #LiveScores #GoalAlert","#PremierLeague #ChampionsLeague #LiveFootball #Arsenal"]
+}
+
+def is_fb(l): return any(x in l.lower() for x in FB_ALLOW)
+def is_tz(l): return any(x in l.lower() for x in TZ)
+def tags(l):
+    if "kenya" in l.lower(): return random.choice(TAGS["ke"])
+    if is_tz(l): return random.choice(TAGS["tz"])
+    return random.choice(TAGS["eu"])
+
+def post(text):
+    if not text.startswith("🟢"): text="🟢 "+text
+    print(text)
+    try: requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",json={"chat_id":TG_CHAT,"text":text},timeout=10)
+    except: pass
     try:
-     cp=ev.get("competitions",[{}])[0];cs=cp.get("competitors",[]);ho=next((c for c in cs if c.get("homeAway")=="home"),{});aw=next((c for c in cs if c.get("homeAway")=="away"),{})
-     lg=ev.get("league",{});st=cp.get("status",{}).get("type",{});sn=st.get("name","");clock=cp.get("status",{}).get("displayClock","")
-     F.append({"fixture":{"id":f"e-{ev.get('id')}","date":cp.get("date",""),"status":{"short":"HT" if "HALFTIME" in sn else "1H" if sn in ["STATUS_IN_PROGRESS"] else "FT" if sn=="STATUS_FINAL" else "NS","el":clock},"venue":cp.get("venue",{}).get("fullName","")},"league":{"name":lg.get("name","Football"),"id":lg.get("id",""),"country":"World"},"teams":{"home":{"name":ho.get("team",{}).get("displayName","Home")},"away":{"name":aw.get("team",{}).get("displayName","Away")}},"goals":{"home":int(ho.get("score")) if str(ho.get("score")).isdigit() else None,"away":int(aw.get("score")) if str(aw.get("score")).isdigit() else None}})
-    except:continue
-   if F:LC[y]=(time.time(),F);return F
- except:pass
- return []
+        r=requests.post(f"https://graph.facebook.com/{FB_PAGE_ID}/feed",data={"message":text,"access_token":FB_PAGE_TOKEN},timeout=15)
+        # Auto comment after 30 sec for algo boost
+        if r.status_code==200:
+            pid=r.json().get("id")
+            time.sleep(25)
+            try: requests.post(f"https://graph.facebook.com/{pid}/comments",data={"message":f"📊 Full stats & table on website: unfilteredscores.com 👇 Follow {chr(0x1F7E2)} for faster goals!","access_token":FB_PAGE_TOKEN},timeout=10)
+            except: pass
+    except: pass
 
-def api_all(d):
- if d in C and time.time()-C[d][0]<180 and C[d][1]:return C[d][1]
- try:
-  if KEY:
-   r=requests.get("https://v3.football.api-sports.io/fixtures",headers=H,params={"date":d,"season":season()},timeout=12)
-   if r.status_code==429:return []
-   if r.status_code==200:
-    D=r.json().get("response",[])
-    C[d]=(time.time(),D);return D
- except:pass
- return []
+# --- SOURCES ROTATING ---
+def get_api(): # Only Kenya/TZ, saves 100 req
+    if USED["c"]>=90 or not API_KEY: return []
+    try:
+        d=datetime.now(EAT).strftime("%Y-%m-%d")
+        r=requests.get(f"https://v3.football.api-sports.io/fixtures?date={d}",headers={"x-apisports-key":API_KEY},timeout=15)
+        USED["c"]+=1
+        if r.status_code==429: return []
+        out=[]
+        for f in r.json().get("response",[]):
+            lg=f["league"]["name"]
+            if not ("kenya" in lg.lower() or is_tz(lg)): continue
+            out.append({"src":"API","id":f"api-{f['fixture']['id']}","lg":lg,"h":f["teams"]["home"]["name"],"a":f["teams"]["away"]["name"],"st":f["fixture"]["status"]["short"],"m":str(f["fixture"]["status"]["elapsed"] or ""),"gh":f["goals"]["home"] or 0,"ga":f["goals"]["away"] or 0})
+        return out
+    except: return []
 
-def combined(d):
- api=api_all(d);espn=live_all(d);all=[];seen=set()
- for f in api+espn:
-  try:
-   k=mkey(f['teams']['home']['name'],f['teams']['away']['name'],f['fixture']['date'])
-   if k not in seen:all.append(f);seen.add(k)
-  except:all.append(f)
- return all
+def get_ls(): # Livescore main fast
+    try:
+        url="https://prod-public-api.livescore.com/v1/api/app/date/soccer/"+datetime.now(EAT).strftime("%Y%m%d")+"/3?MD=1"
+        j=requests.get(url,timeout=12).json()
+        out=[]
+        for s in j.get("Stages",[]):
+            lg=s.get("Cnm","")+" "+s.get("Snm","")
+            for e in s.get("Events",[]):
+                out.append({"src":"LS","id":f"ls-{e.get('Eid')}","lg":lg,"h":e.get("T1",[{}])[0].get("Nm",""),"a":e.get("T2",[{}])[0].get("Nm",""),"st":e.get("Eps",""),"m":e.get("Eps",""),"gh":int(e.get("Tr1",0) or 0),"ga":int(e.get("Tr2",0) or 0)})
+        return out
+    except: return []
 
-# --- FLASK - FLASHSCORE STYLE - NO CRASH - NO EXTRA INFO ---
-@app.route('/api/day')
-def day():
- try:
-  d=request.args.get('date') or datetime.now(EAT).strftime("%Y-%m-%d");s=request.args.get('search','').lower()
-  F=combined(d)
-  if s:F=[f for f in F if s in f['teams']['home']['name'].lower() or s in f['teams']['away']['name'].lower() or s in f['league']['name'].lower()]
-  F.sort(key=lambda x:x['fixture']['date'])
-  G=defaultdict(list)
-  for f in F:
-   # Detect Kenya
-   ctry=f['league'].get('country','World')
-   lname=f['league']['name']
-   if "kenya" in lname.lower() or f['league'].get('id')==324:ctry="Kenya"
-   if is_congo(lname):ctry="DR Congo"
-   if "england" in ctry.lower():ctry="England"
-   G[(ctry,lname)].append(f)
-  B=defaultdict(list)
-  for (c,l),gm in G.items():B[c].append({"league":l,"games":gm})
-  # Flashscore order: Kenya first, then DR Congo, then England, rest
-  order=lambda x:0 if "kenya" in x.lower() else 1 if "congo" in x.lower() else 2 if "england" in x.lower() else 3
-  out=[{"country":c,"leagues":sorted(ls,key=lambda x:x['league'])} for c,ls in B.items()]
-  out.sort(key=lambda x:order(x['country']))
-  return jsonify({"date":d,"countries":out,"count":len(F)})
- except Exception as e:return jsonify({"error":str(e),"countries":[],"count":0})
+def get_espn_all(): # For WEBSITE - ALL COUNTRIES
+    out=[]
+    codes=["eng.1","esp.1","ita.1","ger.1","fra.1","uefa.champions","uefa.europa","ken.1","tan.1","ned.1","por.1","bra.1","mex.1","usa.1","afr.1"]
+    for c in codes:
+        try:
+            j=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{c}/scoreboard",timeout=8).json()
+            for ev in j.get("events",[]):
+                comp=ev["competitions"][0]
+                lg=ev.get("league",{}).get("name",c)
+                out.append({"src":"ESPN","id":f"espn-{ev['id']}","lg":lg,"h":comp["competitors"][0]["team"]["displayName"],"a":comp["competitors"][1]["team"]["displayName"],"st":comp["status"]["type"]["shortDetail"],"m":comp["status"]["displayClock"] or "","gh":int(comp["competitors"][0]["score"]),"ga":int(comp["competitors"][1]["score"])})
+        except: continue
+    return out
 
-@app.route('/')
-def home():return jsonify({"status":"V18 LIVE","fb":"DIRECT POST ALLOWED","hashtags":"ROTATING FOR REACH"})
+def get_news():
+    try:
+        j=requests.get("https://site.api.espn.com/apis/site/v2/sports/soccer/news",timeout=8).json()
+        return j.get("articles",[])[:3]
+    except: return []
 
 def bot():
- print("🟢 BOT V18 - DIRECT FB POST - ROTATING TAGS - FLASHSCORE")
- while True:
-  try:
-   now=datetime.now(EAT);today=now.strftime("%Y-%m-%d");F=combined(today)
-   for f in F:
-    fid=str(f['fixture']['id']);hg=f['goals']['home'];ag=f['goals']['away'];st=f['fixture']['status'].get('short','NS');lg=f['league']['name'];ho=f['teams']['home']['name'];aw=f['teams']['away']['name'];mn=f['fixture']['status'].get('el','');venue=f['fixture'].get('venue','');date=f['fixture']['date']
-    mk=mkey(ho,aw,date);pr=MS.get(mk,{})
-    # KICKOFF
-    if st in ['1H','2H'] and pr.get('status') not in ['1H','2H'] and f"{mk}-k" not in PD:
-     PD.add(f"{mk}-k");save();post(f"🔴 KICK OFF!\n\n{ho} vs {aw}\n{lg} LIVE!\n{venue}",lg)
-    # GOAL
-    if hg is not None and ag is not None and (hg+ag)>0:
-     gid=f"{mk}-{hg}-{ag}"
-     if gid not in PD and pr.get('hg')!=hg or pr.get('ag')!=ag:
-      if (pr.get('hg',0)+pr.get('ag',0))!=(hg+ag):
-       PD.add(gid);save()
-       post(f"⚽ GOOAL! {mn}'\n\n{ho} {hg}-{ag} {aw}\n{lg}",lg)
-    # HT / FT
-    if st=='HT' and f"{mk}-ht" not in PD:PD.add(f"{mk}-ht");save();post(f"⏸️ HALF TIME\n\n{ho} {hg}-{ag} {aw}\n{lg}",lg)
-    if st=='FT' and f"{mk}-ft" not in PD and hg is not None:PD.add(f"{mk}-ft");save();post(f"✅ FULL TIME\n\n{ho} {hg}-{ag} {aw}\n{lg}",lg)
-    MS[mk]={"status":st,"hg":hg,"ag":ag}
-   time.sleep(40)
-  except Exception as e:print(e);time.sleep(40)
+    rot=0
+    while True:
+        try:
+            games=[]
+            if rot%3==0: games+=get_api()
+            if rot%3==1: games+=get_ls()
+            else: games+=get_espn_all()
+            if rot%2==0: games+=get_ls()
+            rot+=1
+
+            for g in games:
+                # Only post FB if allowed
+                if not is_fb(g["lg"]): continue
+                sk=f"{g['id']}-{g['gh']}-{g['ga']}"
+                ft=f"ft-{g['id']}"
+                hyp=f"hyp-{g['id']}"
+
+                # HYPE 60 min before big game
+                if "NS" in g["st"] and hyp not in posted and any(x in g["lg"].lower() for x in ["premier","champions","kenya","tanzania"]):
+                    if is_tz(g["lg"]): txt=f"🔥 MECHI KALI! {g['h']} vs {g['a']} - {g['m']}\n{g['lg']}\nNani atashinda? 👇\n\n{tags(g['lg'])}"
+                    else: txt=f"🔥 COMING UP: {g['h']} vs {g['a']} - {g['lg']}\nWho wins? Comment 👇 Winner gets shoutout!\n\n{tags(g['lg'])}"
+                    post(txt); posted[hyp]=1; save()
+
+                # GOAL - Tanzanian Kiswahili
+                if sk not in posted and (g["gh"]+g["ga"]>0):
+                    t=tags(g["lg"])
+                    if is_tz(g["lg"]): txt=f"GOOOL! Dakika {g['m']} {g['h']} {g['gh']}-{g['ga']} {g['a']}!\n{g['lg']} | {g['src']}\nSimba au Yanga? 👇\n\n{t}\nFollow 🟢 for live goals!"
+                    else: txt=f"GOOAL! {g['m']} {g['h']} {g['gh']}-{g['ga']} {g['a']}\n{g['lg']} | {g['src']}\nArsenal au Man City? 👇\n\n{t}\nFollow 🟢 faster than TV!"
+                    post(txt); posted[sk]=1; save()
+
+                # FT
+                if ("FT" in g["st"] or "Final" in g["st"]) and ft not in posted:
+                    t=tags(g["lg"])
+                    if is_tz(g["lg"]): txt=f"MATOKEO: {g['h']} {g['gh']}-{g['ga']} {g['a']}\n{g['lg']}\nMaoni yako? 👇\n\n{t}"
+                    else: txt=f"FULL TIME: {g['h']} {g['gh']}-{g['ga']} {g['a']}\n{g['lg']}\nThoughts? 👇\n\n{t}"
+                    post(txt); posted[ft]=1; save()
+
+            # NEWS
+            if rot%40==0:
+                for a in get_news():
+                    nid=f"news-{a['id']}"
+                    if nid not in posted:
+                        post(f"BREAKING: {a['headline']}\nDetails on website 👇\n\n#FootballNews #Transfers #LiveScores")
+                        posted[nid]=1; save(); break
+            time.sleep(40)
+        except: time.sleep(20)
+
+@app.route("/")
+def home():
+    try:
+        games=get_espn_all()+get_ls()
+        # Flashscore style grouped
+        html="<html><head><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;margin:0} .h{background:#0a5e2a;color:white;padding:12px;text-align:center} .c{padding:6px;border-bottom:1px solid #eee} .live{color:red;font-weight:bold}</style></head><body>"
+        html+=f"<div class=h>🟢 Unfiltered Scores - LIVE | API {USED['c']}/100 | {len(games)} games</div>"
+        for g in games[:250]:
+            live="<span class=live>LIVE</span> " if "1H" in g['st'] or "2H" in g['st'] or g['gh']+g['ga']>0 else ""
+            html+=f"<div class=c>{live}{g['lg']} - {g['h']} {g['gh']}-{g['ga']} {g['a']} {g['m']} [{g['src']}]</div>"
+        html+="</body></html>"
+        return html
+    except Exception as e:
+        return f"🟢 Unfiltered Scores LIVE - Loading {USED['c']}/100"
+
+@app.route("/health")
+def health(): return "OK"
 
 threading.Thread(target=bot,daemon=True).start()
-if __name__=="__main__":app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=int(os.getenv("PORT",10000)))

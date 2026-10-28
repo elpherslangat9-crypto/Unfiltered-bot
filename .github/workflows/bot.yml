@@ -1,4 +1,4 @@
-name: V29 FB LIVE EVERYTHING
+name: V31 CLEAN LIVE
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
     branches: [ main ]
 
 concurrency:
-  group: fb-live-v29
+  group: fb-v31
   cancel-in-progress: false
 
 jobs:
@@ -21,8 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests
-      - name: Run V29 GitHub -> Facebook
-        env:
+      - env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}

@@ -1,4 +1,4 @@
-name: V38 Live - Perfect 24/7
+name: V40 Live - Perfect No Mistake
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
     - cron: '0 */4 * * *'
 
 concurrency:
-  group: v38-live-perfect
+  group: v40-live-perfect
   cancel-in-progress: false
 
 jobs:
@@ -20,17 +20,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set Africa/Nairobi Time - Kenya/Zambia Prime
+      - name: Set Africa/Nairobi Time
         run: |
           sudo timedatectl set-timezone Africa/Nairobi
-          echo "✅ TIME SET: $(date)"
+          echo "TIME: $(date) - Africa/Nairobi"
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Cache V38 Memory - PERFECT KEY - No Repeat FT
+      - name: Cache V40 Memory - No Repeat FT
         uses: actions/cache@v4
         with:
           path: |
@@ -38,36 +38,51 @@ jobs:
             scores_v38.json
             posted.json
             scores.json
-          key: v38-perfect-memory-v1
+            schedule.json
+            /tmp/p38.json
+            /tmp/s38.json
+          key: v40-memory-v1
           restore-keys: |
-            v38-perfect-memory-v1
+            v40-memory-v1
 
       - name: Init Memory If First Run
         run: |
           [ -f posted_v38.json ] || echo '{}' > posted_v38.json
           [ -f scores_v38.json ] || echo '{}' > scores_v38.json
           [ -f posted.json ] || echo '{}' > posted.json
-          echo "Memory ready:"
+          [ -f schedule.json ] || echo '{"date":"2026-01-01","built_h":-10,"games":{}}' > schedule.json
           ls -lh *.json
+          echo "Memory ready - No FT repeat"
 
-      - name: Install Deps
+      - name: Install Deps - With Pillow for Branding
         run: |
           pip install --upgrade pip
-          pip install requests pytz
-          echo "✅ Deps ready - LS + ESPN + API"
+          pip install requests pytz Pillow
+          echo "Deps ready - LS + ESPN + API + Pillow"
 
-      - name: V38 LIVE - NEVER SLEEP - All Eyes
+      - name: V40 LIVE - Never Sleep - Branded
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
-          echo "🔵 V38 PERFECT LIVE STARTED - $(date)"
+          echo "=================================================="
+          echo "🟢 V40 PERFECT LIVE - $(date)"
+          echo "👀 LS first + ESPN + API backup"
+          echo "🖼️ News branded: Unfiltered Scores corner"
+          echo "🟢 Brand: All posts start with green dot"
+          echo "📰 News: ALL news, not 7 per day"
+          echo "=================================================="
           while true; do
-            echo "🚀 Starting main.py at $(date)"
+            echo ""
+            echo "🚀 Starting V40 at $(date)"
             python main.py
             CODE=$?
-            echo "⚠️ exited $CODE at $(date)"
-            ls -lh *.json 2>/dev/null
-            if [ $CODE -eq 0 ]; then sleep 10; else sleep 20; fi
+            echo "⚠️ V40 exited $CODE at $(date) - healing"
+            ls -lh *.json /tmp/*.json 2>/dev/null || true
+            if [ $CODE -eq 0 ]; then
+              sleep 10
+            else
+              sleep 20
+            fi
           done

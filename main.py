@@ -1,5 +1,5 @@
 import os, json, time, requests, io
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageDraw, ImageFont
 
@@ -31,7 +31,7 @@ def fb_text(t):
     if not t.startswith("🟢"): t="🟢 "+t
     try:
         r=requests.post(f"https://graph.facebook.com/{PAGE}/feed",data={"message":t,"access_token":TOKEN},timeout=15)
-        print(f"FB TEXT {r.status_code} {t[:75]}")
+        print(f"FB TEXT {r.status_code} {t[:80]}")
         return r.status_code==200
     except Exception as e: print(f"FB err {e}"); return False
 
@@ -53,28 +53,37 @@ def fb_photo_file(path,cap):
     except Exception as e: print(f"FILE err {e}"); return False
 
 def make_news_image(img_url):
+    # FIXED: Extend below, don't cover photo - green dot
     try:
         resp=requests.get(img_url,timeout=10)
         im=Image.open(io.BytesIO(resp.content)).convert("RGB")
         w,h=im.size
-        if w>1000:
-            nh=int(h*1000/w); im=im.resize((1000,nh), Image.LANCZOS); w,h=1000,nh
-        draw=ImageDraw.Draw(im)
+        if w>1080:
+            nh=int(h*1080/w); im=im.resize((1080,nh), Image.LANCZOS); w,h=1080,nh
+        bar_h=int(h*0.19)
+        if bar_h<90: bar_h=90
+        new_h=h+bar_h
+        new_im=Image.new("RGB",(w,new_h),(0,0,0))
+        new_im.paste(im,(0,0))
+        draw=ImageDraw.Draw(new_im)
         try:
-            fb=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", max(18,int(w*0.028)))
-            fs=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", max(14,int(w*0.018)))
+            fb=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", max(20,int(w*0.032)))
+            fs=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", max(14,int(w*0.020)))
+            fs_small=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", max(12,int(w*0.016)))
         except:
-            fb=ImageFont.load_default(); fs=ImageFont.load_default()
-        bar_h=int(h*0.22)
-        im.paste(Image.new("RGB",(w,bar_h),(0,0,0)),(0,h-bar_h))
-        draw.text((18,h-bar_h+10),"🟢 Unfiltered Scores",font=fb,fill=(255,255,255))
-        draw.text((18,h-bar_h+int(bar_h*0.55)),"Live Football Worldwide",font=fs,fill=(220,220,220))
-        txt="Unfiltered Scores"
-        try: tw=draw.textbbox((0,0),txt,font=fs)[2]
-        except: tw=len(txt)*8
-        draw.text((w-tw-15,h-28),txt,font=fs,fill=(255,255,255))
-        out="/tmp/news_branded.jpg"; im.save(out,"JPEG",quality=88); return out
-    except Exception as e: print(f"Brand err {e}"); return None
+            fb=ImageFont.load_default(); fs=ImageFont.load_default(); fs_small=ImageFont.load_default()
+        draw.ellipse((18, h+18, 38, h+38), fill=(0,230,100))
+        draw.text((48, h+16), "Unfiltered Scores", font=fb, fill=(255,255,255))
+        draw.text((18, h+48), "Live Football Worldwide", font=fs, fill=(200,200,200))
+        corner="Unfiltered Scores"
+        try: tw=draw.textbbox((0,0),corner,font=fs_small)[2]-draw.textbbox((0,0),corner,font=fs_small)[0]
+        except: tw=len(corner)*7
+        draw.text((w-tw-18, new_h-28), corner, font=fs_small, fill=(180,180,180))
+        out="/tmp/news_branded.jpg"
+        new_im.save(out,"JPEG",quality=90)
+        return out
+    except Exception as e:
+        print(f"Brand err {e}"); return None
 
 def clean_lg(lg):
     l=lg.lower()
@@ -163,8 +172,7 @@ def build_schedule():
     today=datetime.now().strftime("%Y-%m-%d")
     if USED["reset"]!=today: USED["api"]=0; USED["reset"]=today
     last=sched.get("built_h",-10); cur=datetime.now().hour
-    if sched.get("date")==today and cur-last<2 and len(sched.get("games",{}))>15:
-        print(f"Schedule keep {len(sched['games'])}"); return
+    if sched.get("date")==today and cur-last<2 and len(sched.get("games",{}))>15: return
     games={}; print("Building schedule ALL SOURCES...")
     if API_KEY and USED["api"]<35:
         try:
@@ -172,7 +180,7 @@ def build_schedule():
             USED["api"]+=1
             for f in r.json().get("response",[]):
                 norm=f"{f['teams']['home']['name'].lower()} vs {f['teams']['away']['name'].lower()}"
-                games[norm]={"h":f['teams']['home']['name'],"a":f['teams']['away']['name'],"lg":f["league"]["name"],"fid":f['fixture']['id'],"src":"API"}
+                games[norm]={"h":f['teams']['home']['name'],"a":f['teams']['away']['name'],"lg":f["league"]["name"],"fid":f['fixture']['id'],"src":"API","time":f['fixture']['date']}
             print(f"API {len(r.json().get('response',[]))}")
         except Exception as e: print(f"API err {e}")
     espn_codes=["eng.1","esp.1","ita.1","ger.1","fra.1","uefa.champions","uefa.europa","ken.1","tan.1","zam.1","ned.1","por.1"]
@@ -184,7 +192,7 @@ def build_schedule():
                 comp=ev["competitions"][0]; h=comp["competitors"][0]["team"]["displayName"]; a=comp["competitors"][1]["team"]["displayName"]
                 norm=f"{h.lower()} vs {a.lower()}"
                 if norm not in games:
-                    games[norm]={"h":h,"a":a,"lg":ev.get("league",{}).get("name",code),"fid":ev['id'],"src":"ESPN"}; cnt+=1
+                    games[norm]={"h":h,"a":a,"lg":ev.get("league",{}).get("name",code),"fid":ev['id'],"src":"ESPN","time":ev.get('date','')}; cnt+=1
         except: pass
     print(f"ESPN +{cnt}")
     ls_sched=ls_schedule(); add=0
@@ -193,9 +201,28 @@ def build_schedule():
     print(f"LS +{add}")
     if len(games)>=10:
         sched={"date":today,"built_h":cur,"games":games}; save()
-        print(f"✅ FINAL SCHEDULE {len(games)} games - API {USED['api']}/75")
-    else:
-        print(f"Low {len(games)} keep old {len(sched.get('games',{}))}")
+        print(f"✅ SCHEDULE {len(games)} games")
+
+def check_lineups():
+    try:
+        for norm,g in sched.get("games",{}).items():
+            lg=g.get("lg","")
+            if not is_top_lineup(lg): continue
+            line_k=f"lineup-{norm}"
+            if line_k in posted: continue
+            fid=g.get("fid")
+            if not fid or not str(fid).isdigit(): continue
+            if API_KEY and USED["api"]<85:
+                try:
+                    r=requests.get(f"https://v3.football.api-sports.io/fixtures/lineups?fixture={fid}",headers={"x-apisports-key":API_KEY},timeout=5)
+                    USED["api"]+=1
+                    data=r.json().get("response",[])
+                    if len(data)>=2:
+                        h=g["h"]; a=g["a"]; clean=clean_lg(lg); t=tags(clean)
+                        if fb_text(f"📋 LINEUPS: {h} vs {a}\nLineups confirmed ✅\n{clean} is starting soon!\n\n{t}"):
+                            posted[line_k]=True; save(); print(f"Lineup posted {h} vs {a}"); time.sleep(2)
+                except: pass
+    except Exception as e: print(f"Lineup err {e}")
 
 def scorer(fid):
     if USED["api"]>=90 or not API_KEY: return ""
@@ -223,10 +250,11 @@ def get_news():
     return uniq[:40]
 
 def bot():
-    print("🟢 V42 FINAL - ALL SOURCES SCHEDULE + TOP LINEUPS ONLY + BRANDED")
+    print("🟢 V43 FINAL - LINEUPS FIX + NO CUT PHOTO + GREEN BRAND")
     while True:
         try:
             build_schedule()
+            if datetime.now().minute % 8 < 2: check_lineups()
             ls=ls_live()
             if len(ls)<5:
                 with ThreadPoolExecutor(max_workers=2) as ex:
@@ -234,7 +262,7 @@ def bot():
                 all_games=ls+espn+api
                 print(f"ALL LS:{len(ls)} ESPN:{len(espn)} API:{len(api)} -> {len(all_games)}")
             else:
-                all_games=ls; print(f"LS ONLY {len(ls)} API saved {USED['api']}/75")
+                all_games=ls; print(f"LS ONLY {len(ls)} API {USED['api']}/75")
             merged={}
             for g in all_games:
                 norm=g["norm"]
@@ -252,10 +280,7 @@ def bot():
                 norm=g["norm"]; lg=clean_lg(g["lg"]); t=tags(lg)
                 st=g["st"]; m=str(g["m"]); gh=g["gh"]; ga=g["ga"]
                 is_ft="FT" in st or "AET" in st; is_ht="HT" in st
-                line_k=f"lineup-{norm}"; kick_k=f"kick-{norm}"; goal_k=f"goal-{norm}-{gh}-{ga}"; ht_k=f"ht-{norm}"; ft_k=f"ft-{norm}"
-                if line_k not in posted and is_top_lineup(lg) and "fid" in g:
-                    if fb_text(f"📋 LINEUPS: {g['h']} vs {g['a']}\nLineups confirmed ✅\n{lg}\n\n{t}"):
-                        posted[line_k]=True; save()
+                kick_k=f"kick-{norm}"; goal_k=f"goal-{norm}-{gh}-{ga}"; ht_k=f"ht-{norm}"; ft_k=f"ft-{norm}"
                 if kick_k not in posted:
                     if fb_text(f"⚽ KICKOFF: {g['h']} vs {g['a']}\n{lg} is LIVE now!\n\n{t}"):
                         posted[kick_k]=True; scores[norm]={"gh":gh,"ga":ga}; save()
@@ -283,8 +308,8 @@ def bot():
                         if branded and os.path.exists(branded): ok=fb_photo_file(branded,caption)
                         if not ok: ok=fb_photo_url(n["img"],caption)
                         if ok: posted[nid]=True; save(); cnt+=1; time.sleep(3)
-            time.sleep(6)
+            time.sleep(7)
         except Exception as e:
-            print(f"ERR {e}"); import traceback; traceback.print_exc(); time.sleep(6)
+            print(f"ERR {e}"); import traceback; traceback.print_exc(); time.sleep(7)
 
 if __name__=="__main__": bot()

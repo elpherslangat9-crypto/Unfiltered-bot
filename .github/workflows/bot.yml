@@ -5,7 +5,7 @@ on:
     branches: [main, master]
   workflow_dispatch:
   schedule:
-    - cron: '0 */4 * * *'  # restarts every 4h = 0 gap 24/7
+    - cron: '0 */4 * * *'
 
 concurrency:
   group: v38-live-perfect
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 230  # 4h - 10m safe
+    timeout-minutes: 230
 
     steps:
       - name: Checkout
@@ -24,13 +24,11 @@ jobs:
         run: |
           sudo timedatectl set-timezone Africa/Nairobi
           echo "✅ TIME SET: $(date)"
-          echo "✅ EAT: Africa/Nairobi for 19:00 KPL/Tanzania"
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Cache V38 Memory - PERFECT KEY - No Repeat FT
         uses: actions/cache@v4
@@ -64,26 +62,12 @@ jobs:
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
-          echo "=================================================="
           echo "🔵 V38 PERFECT LIVE STARTED - $(date)"
-          echo "👀 Mode: LS 0.4s FIRST -> ESPN 0.5s -> API backup"
-          echo "💾 Memory: posted_v38 + scores_v38 CACHED"
-          echo "🏷️ Leagues: KPL Zambia Tanzania EPL LaLiga UCL"
-          echo "=================================================="
-
           while true; do
-            echo ""
             echo "🚀 Starting main.py at $(date)"
             python main.py
             CODE=$?
-            echo "⚠️ main.py exited with $CODE at $(date)"
-            echo "💾 Saving memory..."
+            echo "⚠️ exited $CODE at $(date)"
             ls -lh *.json 2>/dev/null
-            if [ $CODE -eq 0 ]; then
-              echo "Clean exit - restart in 10s"
-              sleep 10
-            else
-              echo "Crash - heal in 20s"
-              sleep 20
-            fi
+            if [ $CODE -eq 0 ]; then sleep 10; else sleep 20; fi
           done

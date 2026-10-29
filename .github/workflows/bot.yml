@@ -1,28 +1,118 @@
-name: V31 CLEAN LIVE
+name: V38 Live - SPECIAL Never Sleep
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'  # restart every 5h -> 24/7 non-stop
 
 concurrency:
-  group: fb-v31
+  group: v38-special-live
   cancel-in-progress: false
 
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 300  # 5h per job, cron restarts = 24/7
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Africa/Nairobi Time - For Kenya/Zambia Evening
+        run: |
+          sudo timedatectl set-timezone Africa/Nairobi
+          echo "TIME: $(date)"
+          echo "KENYA TIME = EAT - Your fans prime time 7pm"
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install requests
-      - env:
+
+      - name: Cache V38 Memory - posted & scores NEVER LOST
+        uses: actions/cache@v4
+        with:
+          path: |
+            posted_v38.json
+            posted.json
+            scores_v38.json
+            scores.json
+            schedule.json
+            sched38.json
+            /tmp/p38.json
+            /tmp/s38.json
+            /tmp/sched38.json
+          key: v38-memory-${{ github.run_id }}
+          restore-keys: |
+            v38-memory-
+
+      - name: Restore Memory Files - So No FT Repeat
+        run: |
+          echo "Restoring V38 memory..."
+          ls -lh *.json || echo "No old json, first run"
+          echo "Posted keys: $(cat posted_v38.json 2>/dev/null | wc -c) bytes"
+          echo "This prevents FT posting twice after restart"
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install requests pytz
+          echo "V38 deps ready - LS+ESPN+API"
+
+      - name: V38 LIVE - Special Mode
+        env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-        run: python main.py
+        run: |
+          echo "=================================================="
+          echo "🔵 V38 SPECIAL - LIVESCORE FIRST - NEVER SLEEP"
+          echo "📍 Time: $(date) - Africa/Nairobi"
+          echo "👀 All Eyes Mode - LS:0.4s ESPN:0.5s API:backup"
+          echo "💾 Memory: Cache synced - No repeat FT"
+          echo "🏷️ Leagues: Kenya Zambia Tanzania EPL LaLiga UCL + 1000"
+          echo "🔋 API Limit: 75/100 safe - Switch to LS+ESPN after"
+          echo "=================================================="
+          
+          # SPECIAL: Loop with heal + logs
+          ATTEMPT=0
+          while true; do
+            ATTEMPT=$((ATTEMPT+1))
+            echo ""
+            echo "🚀 ATTEMPT $ATTEMPT - Starting V38 at $(date)"
+            echo "----------------------------------------"
+            
+            # Run bot - if crashes, heal
+            python main.py
+            
+            EXIT_CODE=$?
+            echo ""
+            echo "⚠️ Bot exited code $EXIT_CODE at $(date)"
+            
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "Clean exit - restarting in 5s"
+              sleep 5
+            else
+              echo "Crash detected - healing in 15s"
+              sleep 15
+            fi
+            
+            # Save memory before restart
+            echo "Saving memory files..."
+            ls -lh *.json /tmp/*.json 2>/dev/null || true
+          done
+
+      - name: Save Memory on Exit - For Next Run
+        if: always()
+        run: |
+          echo "Saving V38 state for next job..."
+          ls -lh *.json
+          echo "Cache will restore these - No FT repeat next run"
+
+      - name: Auto-Heal Notice
+        if: failure()
+        run: |
+          echo "❤️ V38 Special: Job failed but cron will restart in 5h"
+          echo "Your page still safe - memory cached"

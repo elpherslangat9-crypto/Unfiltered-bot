@@ -1,27 +1,32 @@
 name: V48 LIVE
 on:
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install requests pillow --quiet
+      - run: pip install requests pillow
       - env:
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_FOOTBALL_API_KEY: ${{ secrets.API_FOOTBALL_API_KEY }}
+          MAX_API_REQUESTS: "95"
         run: python main.py
       - if: always()
         run: |
           git config user.name "bot"
           git config user.email "bot@bot.com"
-          git add posted_v38.json posted.json scores_v38.json schedule.json news_titles.json -f || true
-          git commit -m "V48" || true
+          git add posted.json posted_v38.json scores_v38.json schedule.json news_titles.json -f || true
+          git commit -m "V48 auto save" || true
           git push || true

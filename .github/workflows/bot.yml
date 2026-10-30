@@ -1,88 +1,34 @@
-name: V40 Live - Perfect No Mistake
-
+name: V48 PRO LIVE
 on:
+  schedule:
+    - cron: '*/2 * * * *'  # Every 2 mins - PRO, not 3
+  workflow_dispatch:
   push:
     branches: [main, master]
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */4 * * *'
-
-concurrency:
-  group: v40-live-perfect
-  cancel-in-progress: false
-
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 230
-
+    timeout-minutes: 3  # Must be short - we exit fast
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set Africa/Nairobi Time
-        run: |
-          sudo timedatectl set-timezone Africa/Nairobi
-          echo "TIME: $(date) - Africa/Nairobi"
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
-      - name: Cache V40 Memory - No Repeat FT
-        uses: actions/cache@v4
-        with:
-          path: |
-            posted_v38.json
-            scores_v38.json
-            posted.json
-            scores.json
-            schedule.json
-            /tmp/p38.json
-            /tmp/s38.json
-          key: v40-memory-v1
-          restore-keys: |
-            v40-memory-v1
-
-      - name: Init Memory If First Run
-        run: |
-          [ -f posted_v38.json ] || echo '{}' > posted_v38.json
-          [ -f scores_v38.json ] || echo '{}' > scores_v38.json
-          [ -f posted.json ] || echo '{}' > posted.json
-          [ -f schedule.json ] || echo '{"date":"2026-01-01","built_h":-10,"games":{}}' > schedule.json
-          ls -lh *.json
-          echo "Memory ready - No FT repeat"
-
-      - name: Install Deps - With Pillow for Branding
-        run: |
-          pip install --upgrade pip
-          pip install requests pytz Pillow
-          echo "Deps ready - LS + ESPN + API + Pillow"
-
-      - name: V40 LIVE - Never Sleep - Branded
+      - name: Install
+        run: pip install requests pillow --quiet
+      - name: Run Bot (ONCE then exit)
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FB_TOKEN: ${{ secrets.FB_TOKEN }}
+          PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+        run: python main.py
+      - name: Save Memory
+        if: always()
         run: |
-          echo "=================================================="
-          echo "🟢 V40 PERFECT LIVE - $(date)"
-          echo "👀 LS first + ESPN + API backup"
-          echo "🖼️ News branded: Unfiltered Scores corner"
-          echo "🟢 Brand: All posts start with green dot"
-          echo "📰 News: ALL news, not 7 per day"
-          echo "=================================================="
-          while true; do
-            echo ""
-            echo "🚀 Starting V40 at $(date)"
-            python main.py
-            CODE=$?
-            echo "⚠️ V40 exited $CODE at $(date) - healing"
-            ls -lh *.json /tmp/*.json 2>/dev/null || true
-            if [ $CODE -eq 0 ]; then
-              sleep 10
-            else
-              sleep 20
-            fi
-          done
+          git config user.name "bot"
+          git config user.email "bot@unfiltered.com"
+          git add posted_v38.json posted.json scores_v38.json schedule.json news_titles.json -f || true
+          git commit -m "V48 $(date '+%Y-%m-%d %H:%M')" || true
+          git push || true

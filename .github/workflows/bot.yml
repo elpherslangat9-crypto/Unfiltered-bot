@@ -1,34 +1,27 @@
 name: V48 PRO LIVE
 on:
   schedule:
-    - cron: '*/2 * * * *'  # Every 2 mins - PRO, not 3
+    - cron: '*/2 * * * *'
   workflow_dispatch:
-  push:
-    branches: [main, master]
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 3  # Must be short - we exit fast
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - name: Install
-        run: pip install requests pillow --quiet
-      - name: Run Bot (ONCE then exit)
-        env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+      - run: pip install requests pillow --quiet
+      - env:
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
-          PAGE_ID: ${{ secrets.FB_PAGE_ID }}
         run: python main.py
-      - name: Save Memory
-        if: always()
+      - if: always()
         run: |
           git config user.name "bot"
-          git config user.email "bot@unfiltered.com"
+          git config user.email "bot@bot.com"
           git add posted_v38.json posted.json scores_v38.json schedule.json news_titles.json -f || true
-          git commit -m "V48 $(date '+%Y-%m-%d %H:%M')" || true
+          git commit -m "V48" || true
           git push || true

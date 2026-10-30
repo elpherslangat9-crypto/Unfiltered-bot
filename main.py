@@ -4,8 +4,9 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor
 
-FB_TOKEN = os.getenv("FB_TOKEN")
-FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+# FIXED: Support both FB_TOKEN and FB_PAGE_ACCESS_TOKEN names
+FB_TOKEN = os.getenv("FB_TOKEN") or os.getenv("FB_PAGE_ACCESS_TOKEN") or os.getenv("FB_PAGE_TOKEN")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID") or os.getenv("PAGE_ID")
 FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY") or os.getenv("API_FOOTBALL_KEY")
 MAX_API = int(os.getenv("MAX_API_REQUESTS", "95"))
 
@@ -82,18 +83,20 @@ def fb_photo(msg, img_path):
     global FB_PAGE_ID
     if not FB_PAGE_ID or FB_PAGE_ID.strip() == "0" or len(FB_PAGE_ID.strip()) < 5:
         print(f"ERROR FB_PAGE_ID is 0 or invalid: {FB_PAGE_ID}")
-        # Try auto-fetch from token
+        # Try auto-fetch from token - FIXED v20.0
         try:
-            r = requests.get(f"https://graph.facebook.com/v26.0/me/accounts?access_token={FB_TOKEN}", timeout=15).json()
+            r = requests.get(f"https://graph.facebook.com/v20.0/me/accounts?access_token={FB_TOKEN}", timeout=15).json()
             FB_PAGE_ID = str(r["data"][0]["id"])
             print(f"Auto-fetched PAGE ID: {FB_PAGE_ID}")
         except Exception as e:
             print(f"Failed auto-fetch PAGE ID: {e}")
             return None
-    url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
+    # FIXED v20.0 - v26 doesn't exist
+    url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
     with open(img_path, "rb") as fp:
         r = requests.post(url, files={"source": fp}, data={"caption": msg, "access_token": FB_TOKEN}, timeout=30)
         print(f"FB {r.status_code} {msg[:60]}")
+        print(f"FB Response: {r.text[:500]}")
         return r
 
 # === NEWS RSS - NO API KEY NEEDED - ALL SOURCES ===
@@ -166,11 +169,7 @@ def fetch_european_livescore():
                 comp=ev["competitions"][0]
                 status_short=comp["status"]["type"]["state"]
                 status_detail=comp["status"]["type"]["detail"]
-                # FIX 2: SKIP YESTERDAY - ESPN date check
-                ev_date = ev.get("date","")[:10]
-                today_str = datetime.utcnow().strftime("%Y-%m-%d")
-                # Allow today and live only, skip if clearly yesterday (optional)
-                games.append({"league_id": lid, "home": comp["competitors"][0]["team"]["displayName"], "away": comp["competitors"][1]["team"]["displayName"], "status_state": status_short, "status_detail": status_detail, "home_logo": comp["competitors"][0]["team"].get("logo",""), "away_logo": comp["competitors"][1]["team"].get("logo",""), "score": f"{comp['competitors'][0].get('score','0')}-{comp['competitors'][1].get('score','0')}", "source": "espn", "date": ev_date})
+                games.append({"league_id": lid, "home": comp["competitors"][0]["team"]["displayName"], "away": comp["competitors"][1]["team"]["displayName"], "status_state": status_short, "status_detail": status_detail, "home_logo": comp["competitors"][0]["team"].get("logo",""), "away_logo": comp["competitors"][1]["team"].get("logo",""), "score": f"{comp['competitors'][0].get('score','0')}-{comp['competitors'][1].get('score','0')}", "source": "espn", "date": ev.get("date","")[:10]})
         except: continue
     print(f"European Livescore {len(games)} games FREE")
     return games
@@ -187,7 +186,6 @@ def fetch_african_api_parallel():
         print(f"African API {used+1}/{MAX_API} remaining {r.headers.get('x-ratelimit-requests-remaining')}")
         data=[]
         for fx in r.json().get("response", []):
-            # FIX 2: ONLY TODAY - already filtered by date=today param
             if fx["league"]["id"] in AFRICAN_IDS or fx["league"]["id"] in ALL_LEAGUES:
                 if fx["league"]["id"] in AFRICAN_IDS:
                     data.append(fx)
@@ -200,6 +198,7 @@ def main():
     posted=load_posted()
     print("=== V53 FIXED - NO YESTERDAY + NO SLASH + PAGE ID FIX ===")
     print(f"PAGE ID CHECK: {FB_PAGE_ID} (len {len(FB_PAGE_ID) if FB_PAGE_ID else 0})")
+    print(f"FB_TOKEN CHECK: {'YES' if FB_TOKEN else 'NO'} len={len(FB_TOKEN) if FB_TOKEN else 0}")
     
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_euro = executor.submit(fetch_european_livescore)
@@ -207,10 +206,7 @@ def main():
         euro_games = future_euro.result()
         african_games = future_african.result()
 
-    # FIX 2: FILTER OUT YESTERDAY GAMES FROM EUROPEAN
     today_utc = datetime.utcnow().strftime("%Y-%m-%d")
-    euro_games_today = [g for g in euro_games if g.get("date","")==today_utc or g.get("date","")=="" or g["status_state"]=="in"]
-    # If date empty, keep (live), but if date is yesterday, drop
     euro_filtered = []
     for g in euro_games:
         g_date = g.get("date","")
@@ -248,7 +244,6 @@ def main():
             posted.add(key); save_posted(posted)
         
         elif state=="post":
-            # FIX 2: ONLY POST FT IF IT'S TODAY'S GAME
             if g.get("date","") and g.get("date","") != today_utc:
                 print(f"Skip yesterday FT {g['home']} {g['away']}")
                 continue
@@ -263,7 +258,6 @@ def main():
         status=fx["fixture"]["status"]["short"]
         home=fx["teams"]["home"]["name"]; away=fx["teams"]["away"]["name"]
         league=ALL_LEAGUES.get(fx["league"]["id"], "African Football")
-        # FIX 2: Extra check - fixture date must be today
         f_date = fx["fixture"]["date"][:10]
         if f_date != datetime.now().strftime("%Y-%m-%d"):
             continue

@@ -1,4 +1,4 @@
-import os, requests, json, random, xml.etree.ElementTree as ET
+import os, requests, json, random, xml.etree.ElementTree as ET, re
 from datetime import datetime, timedelta
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
@@ -78,7 +78,7 @@ def create_image(home, away, league, score_text, home_logo, away_logo, state="LI
     bg.save(path, "JPEG", quality=95, optimize=True)
     return path
 
-# === NEW: TEXT ONLY FOR SCORES - NO PICTURE ===
+# === TEXT ONLY FOR SCORES - NO PICTURE ===
 def fb_text(msg):
     url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed"
     r = requests.post(url, data={"message": msg, "access_token": FB_TOKEN}, timeout=30)
@@ -111,14 +111,31 @@ RSS_FEEDS = [
     "https://feeds.skynews.com/feeds/rss/sports.xml",
 ]
 
+# === ADDED: FOOTBALL ONLY FILTER ===
+OTHER_SPORTS = ["tennis", "cricket", "rugby", "nba", "nfl", "baseball", "golf", "formula 1", " f1 ", "boxing", "wwe", "athletics", "olympic", "hockey", "darts", "snooker"]
+FOOTBALL_KEYWORDS = ["football", "soccer", "premier", "la liga", "serie a", "bundesliga", "champions", "europa", "afcon", "caf", "fifa", "uefa", "chelsea", "arsenal", "liverpool", "man utd", "man city", "barcelona", "real madrid", "transfer", "goal", "league", "cup"]
+
+def is_football_news(title):
+    t = title.lower()
+    for bad in OTHER_SPORTS:
+        if bad in t:
+            if not any(f in t for f in FOOTBALL_KEYWORDS):
+                print(f"FILTERED OUT (not football): {title}")
+                return False
+    return True
+
 def fetch_news_rss():
     items=[]
     for feed_url in RSS_FEEDS:
         try:
             r = requests.get(feed_url, timeout=12)
             root = ET.fromstring(r.content)
-            for item in root.findall(".//item")[:8]:
-                title = item.findtext("title", "")
+            for item in root.findall(".//item")[:10]:
+                title = item.findtext("title", "").strip()
+                if not title or len(title) < 15: continue
+                # FOOTBALL ONLY - ADDED
+                if not is_football_news(title):
+                    continue
                 link = item.findtext("link", "")
                 enclosure = item.find("enclosure")
                 img = enclosure.get("url") if enclosure is not None else ""
@@ -131,7 +148,7 @@ def fetch_news_rss():
         except Exception as e:
             print(f"RSS {feed_url} error {e}")
             continue
-    print(f"RSS fetched {len(items)} news")
+    print(f"RSS fetched {len(items)} FOOTBALL ONLY news")
     return items
 
 # === YOUR OLD NEWS IMAGE - I KEPT IT ===
@@ -163,55 +180,56 @@ def create_news_image_rss(title, img_url):
     bg.save(path, "JPEG", quality=95)
     return path
 
-# === NEW CLEAR NEWS IMAGE - NO BLACK, BIG TEXT, 4:5 ===
-def create_news_image_clear(title, img_url):
+# === ADDED: FETCH REAL OG IMAGE + NO TEXT INSIDE (NO REPETITION) ===
+def fetch_real_image(article_url):
+    try:
+        r = requests.get(article_url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
+        m = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+        if m: return m.group(1)
+        m2 = re.search(r'<meta name="twitter:image" content="([^"]+)"', r.text)
+        if m2: return m2.group(1)
+    except: pass
+    return None
+
+def create_news_image_clear(title, img_url, article_url=""):
     W,H=1080,1350
+    real_img = None
+    if article_url:
+        real_img = fetch_real_image(article_url)
+    target_url = real_img or img_url
     try:
-        r=requests.get(img_url, timeout=15)
-        bg=Image.open(BytesIO(r.content)).convert("RGB")
-        w,h = bg.size
-        min_side = min(w,h)
-        left = (w-min_side)//2
-        top = max(0, (h-min_side)//3)
-        bg = bg.crop((left, top, left+min_side, top+min_side))
-        bg = bg.resize((W,H), Image.LANCZOS)
-        bg = ImageEnhance.Brightness(bg).enhance(1.18)
-        bg = ImageEnhance.Color(bg).enhance(1.25)
-        bg = ImageEnhance.Contrast(bg).enhance(1.1)
-    except:
-        bg=Image.new("RGB", (W,H), (15,25,45))
-    
+        if target_url and "http" in target_url and ".svg" not in target_url:
+            r=requests.get(target_url, timeout=15, headers={"User-Agent":"Mozilla/5.0"})
+            if len(r.content) > 15000:
+                bg=Image.open(BytesIO(r.content)).convert("RGB")
+                w,h = bg.size
+                bg = bg.resize((W, int(W * h / w)), Image.LANCZOS)
+                if bg.height < H:
+                    bg = bg.resize((int(H * w / h), H), Image.LANCZOS)
+                left = (bg.width - W)//2
+                top = max(0, (bg.height - H)//3)
+                bg = bg.crop((left, top, left+W, top+H))
+                bg = ImageEnhance.Brightness(bg).enhance(1.25)
+                bg = ImageEnhance.Color(bg).enhance(1.30)
+                bg = ImageEnhance.Contrast(bg).enhance(1.15)
+            else: raise Exception("small")
+        else: raise Exception("no url")
+    except Exception as e:
+        print(f"Real image fail {e}")
+        bg=Image.new("RGB", (W,H), (22,33,62))
+        try:
+            r=requests.get("https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=1080&h=1350&fit=crop&q=95", timeout=10)
+            bg=Image.open(BytesIO(r.content)).convert("RGB").resize((W,H), Image.LANCZOS)
+            bg = ImageEnhance.Brightness(bg).enhance(1.2)
+        except: pass
     draw=ImageDraw.Draw(bg, "RGBA")
-    for y in range(int(H*0.55), H):
-        alpha = int((y - H*0.55) / (H*0.45) * 210)
-        draw.rectangle([(0,y),(W,y+2)], fill=(0,0,0,alpha))
-    
     try:
-        font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 56)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
     except:
-        font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
-
-    words=title.split()
-    lines=[]; line=""
-    for w in words:
-        if len(line+" "+w) < 30:
-            line=(line+" "+w).strip()
-        else:
-            lines.append(line)
-            line=w
-    if line: lines.append(line)
-    lines=lines[:4]
-
-    y = H - 300 - len(lines)*75
-    for l in lines:
-        draw.text((W//2, y), l, fill="white", font=font_big, anchor="mm", stroke_width=5, stroke_fill="black")
-        y+=75
-    
+    # NO WORDS INSIDE - ONLY CLEAR PHOTO + BRAND - NO REPETITION
     draw.rectangle([(0, H-110),(W,H)], fill=(0,255,136,255))
     draw.text((W//2, H-55), "UNFILTERED SCORES", fill="black", font=font_small, anchor="mm")
-    
     path=f"/tmp/news_{int(datetime.now().timestamp())}.jpg"
     bg.save(path, "JPEG", quality=98, optimize=True)
     return path
@@ -250,7 +268,7 @@ def fetch_african_api_parallel():
 
 def main():
     posted=load_posted()
-    print("=== V56 FIXED - TEXT SCORES + CLEAR NEWS + NEVER MISS GOAL ===")
+    print("=== V60 FINAL - NEVER REPEAT + CLEAR NO-TEXT NEWS + FOOTBALL ONLY ===")
     print(f"PAGE ID: {FB_PAGE_ID} TOKEN: {'YES' if FB_TOKEN else 'NO'}")
     
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -271,7 +289,6 @@ def main():
             key=f"lineup_{base_key}"
             if key in posted: continue
             if g["league_id"] in [39,140,2]:
-                # TEXT ONLY NOW - NO PICTURE (your request)
                 fb_text(f"📋 LINEUPS: {g['home']} vs {g['away']}\n🏆 {league}\n⏰ Kickoff soon! Predict score 👇\n\n#Lineup #UnfilteredScores")
                 posted.add(key); save_posted(posted)
         
@@ -282,15 +299,22 @@ def main():
             posted.add(key); save_posted(posted)
         
         elif state=="in":
-            # FIXED: INCLUDE SCORE SO IT NEVER MISSES GOAL!
-            key=f"live_{base_key}_{detail}_{g['score']}"
-            if key in posted: continue
+            # === ANTI-REPEAT FIX - NEVER REPEAT SAME SCORE ===
+            new_key=f"live_{base_key}_{detail}_{g['score']}"
+            old_key=f"live_{base_key}_{detail}"
+            if new_key in posted or old_key in posted:
+                # Migrate old key to new format to prevent future re-post
+                if old_key in posted and new_key not in posted:
+                    posted.add(new_key)
+                    save_posted(posted)
+                continue
             fb_text(f"⚽ {detail}: {g['home']} {g['score']} {g['away']}\n🏆 {league}\n\n#FootballLive #UnfilteredScores")
-            posted.add(key); save_posted(posted)
+            posted.add(new_key)
+            posted.add(old_key)
+            save_posted(posted)
         
         elif state=="post":
             if g.get("date","") and g.get("date","") != today_utc:
-                print(f"Skip yesterday FT {g['home']} {g['away']}")
                 continue
             key=f"ft_{base_key}"
             if key in posted: continue
@@ -316,10 +340,18 @@ def main():
                         posted.add(key); save_posted(posted)
                 except: pass
         elif status in ["1H","2H","ET","LIVE"]:
+            # ANTI-REPEAT FOR AFRICA TOO
             key=f"af_live_{fid}_{status}_{fx['goals']['home']}_{fx['goals']['away']}"
-            if key in posted: continue
+            old_af_key=f"af_live_{fid}_{status}"
+            if key in posted or old_af_key in posted:
+                if old_af_key in posted and key not in posted:
+                    posted.add(key)
+                    save_posted(posted)
+                continue
             fb_text(f"🌍 LIVE AFRICA: {home} {fx['goals']['home']}-{fx['goals']['away']} {away}\n🏆 {league}\n\n#AfricanFootball #UnfilteredScores")
-            posted.add(key); save_posted(posted)
+            posted.add(key)
+            posted.add(old_af_key)
+            save_posted(posted)
         elif status in ["FT","AET","PEN"]:
             key=f"af_ft_{fid}"
             if key in posted: continue
@@ -331,13 +363,11 @@ def main():
         news=fetch_news_rss()
         if news:
             n=random.choice(news)
-            # USE CLEAR PHOTO - NOT DARK OLD ONE
-            img=create_news_image_clear(n["title"], n["image"])
-            # NO LINK - YOUR REQUEST
+            img=create_news_image_clear(n["title"], n["image"], n.get("link",""))
             fb_photo(f"🚨 {n['title']}\n\n#FootballNews #UnfilteredScores", img)
             posted.add(news_key); save_posted(posted)
 
-    print("V56 DONE - TEXT SCORES + CLEAR NEWS + NEVER MISS GOAL")
+    print("V60 DONE - NEVER REPEAT")
 
 if __name__=="__main__":
     main()

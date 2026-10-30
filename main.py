@@ -1,110 +1,208 @@
-# V48 FINAL - NO WHILE TRUE - FIXES YOUR ERROR
-import os, json, requests, io, hashlib, random, time
+import os, requests, json, random
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-PAGE=os.getenv("FB_PAGE_ID") or os.getenv("PAGE_ID")
-TOKEN=os.getenv("FB_PAGE_TOKEN") or os.getenv("FB_TOKEN")
-API_KEY=os.getenv("API_FOOTBALL_KEY")
+# === CONFIG ===
+FB_TOKEN = os.getenv("FB_TOKEN")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID")
+FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY") or os.getenv("API_FOOTBALL_KEY")
+NEWS_KEY = os.getenv("NEWS_API_KEY")  # Optional - if you have NewsAPI
 
-def load_mem():
-    def ld(n):
-        try:
-            if os.path.exists(n): return json.load(open(n))
-        except: pass
-        return {}
-    p=ld("posted_v38.json") or ld("posted.json") or {}
-    s=ld("scores_v38.json") or {}
-    sf=ld("schedule.json") or {}
-    nt=ld("news_titles.json") or {}
-    games=sf.get("games",{}) if isinstance(sf,dict) else {}
-    if not games and isinstance(sf,dict) and len(sf)>3 and "games" not in sf: games=sf
-    return {"posted":p,"scores":s,"sched":games,"sched_date":sf.get("date","") if isinstance(sf,dict) else "","news_titles":nt}
+ALLOWED_LEAGUE_IDS = {39: "Premier League", 140: "La Liga", 2: "Champions League", 3: "Europa League", 78: "Bundesliga", 135: "Serie A", 61: "Ligue 1"}
+LINEUP_LEAGUE_IDS = [39, 140, 2]
+POSTED_FILE = "posted.json"
 
-def save_mem(m):
-    json.dump(m["posted"],open("posted_v38.json","w")); json.dump(m["posted"],open("posted.json","w"))
-    json.dump(m["scores"],open("scores_v38.json","w"))
-    json.dump({"date":m["sched_date"],"games":m["sched"]},open("schedule.json","w"))
-    json.dump(m["news_titles"],open("news_titles.json","w"))
-
-def fb_text(t):
-    if not t.startswith("🟢"): t="🟢 "+t
-    try: r=requests.post(f"https://graph.facebook.com/{PAGE}/feed",data={"message":t,"access_token":TOKEN},timeout=12); print(f"FB {r.status_code} {t[:60]}"); return r.status_code==200
-    except Exception as e: print(f"FB ERR {e}"); return False
-
-def clean_lg(lg):
-    l=lg.lower()
-    d={"premier":"Premier League","laliga":"LaLiga","champions":"Champions League","serie a":"Serie A","bundesliga":"Bundesliga","ligue 1":"Ligue 1","eredivisie":"Eredivisie","primeira":"Primeira Liga","super lig":"Turkish Super Lig","kenya":"Kenya PL","zambia":"Zambia SL","south africa":"South Africa PSL","saudi":"Saudi Pro League"}
-    for k,v in d.items():
-        if k in l: return v
-    return lg
-
-def tags(lg):
-    l=lg.lower()
-    if "premier" in l: return "#PremierLeague #EPL #FootballLive"
-    if "laliga" in l: return "#LaLiga #FootballLive"
-    if "champions" in l: return "#ChampionsLeague #UCL #FootballLive"
-    if "kenya" in l: return "#KPL #FootballLive"
-    if "saudi" in l: return "#SaudiProLeague #Ronaldo"
-    return "#FootballLive #UnfilteredScores"
-
-def is_lineup_league(lg):
-    l=lg.lower()
-    return ("premier" in l) or ("laliga" in l) or ("champions" in l and "africa" not in l)
-
-def ls_live():
-    out=[]
+def load_posted():
     try:
-        today=datetime.now().strftime("%Y%m%d")
-        j=requests.get(f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today}/3.00?MD=1",headers={"User-Agent":"Mozilla/5.0"},timeout=8).json()
-        for s in j.get("Stages",[]):
-            lg=s.get("Cnm","")+" "+s.get("Snm","")
-            for e in s.get("Events",[]):
-                eps=str(e.get("Eps",""))
-                if eps in ["FT","AET","Postp.","Canc."]: continue
-                h=e.get("T1",[{}])[0].get("Nm",""); a=e.get("T2",[{}])[0].get("Nm","")
-                if h and a: out.append({"h":h,"a":a,"lg":lg,"gh":int(e.get("Tr1",0) or 0),"ga":int(e.get("Tr2",0) or 0),"st":eps,"m":eps,"norm":f"{h.lower()} vs {a.lower()}","fid":e.get("Eid","")})
-    except: pass
-    return out
+        with open(POSTED_FILE, "r") as f: return set(json.load(f))
+    except: return set()
 
-def espn_live():
-    out=[]; today=datetime.now().strftime("%Y%m%d")
-    for code in ["eng.1","esp.1","ger.1","ita.1","fra.1","ned.1","por.1","tur.1","uefa.champions","ken.1","zam.1","rsa.1","sau.1","usa.1"]:
+def save_posted(p):
+    with open(POSTED_FILE, "w") as f: json.dump(list(p)[-800:], f)
+
+# === IPHONE CLEAR IMAGE GENERATOR - NO BLACK SPACE ===
+def create_match_image(home, away, league, score_text, home_logo_url, away_logo_url, status_type="KICKOFF"):
+    # 1080x1080 - iPhone clear, no black bars
+    W, H = 1080, 1080
+    # Gradient background - dark premium
+    bg = Image.new("RGB", (W, H), (10, 15, 25))
+    draw = ImageDraw.Draw(bg)
+    # Gradient effect
+    for y in range(H):
+        r = int(10 + y*0.08)
+        g = int(15 + y*0.05)
+        b = int(25 + y*0.1)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+    
+    # Download logos - high quality
+    def get_logo(url):
         try:
-            j=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={today}",timeout=5).json()
-            for ev in j.get("events",[]):
-                comp=ev["competitions"][0]
-                if comp["status"]["type"]["completed"]: continue
-                c1=comp["competitors"][0]; c2=comp["competitors"][1]
-                h=c1["team"]["displayName"]; a=c2["team"]["displayName"]
-                out.append({"h":h,"a":a,"lg":ev.get("league",{}).get("name",code),"gh":int(float(c1["score"] or 0)),"ga":int(float(c2["score"] or 0)),"st":comp["status"]["type"]["shortDetail"],"m":comp["status"]["displayClock"],"norm":f"{h.lower()} vs {a.lower()}","fid":ev.get("id","")})
+            r = requests.get(url, timeout=10)
+            logo = Image.open(BytesIO(r.content)).convert("RGBA")
+            return logo.resize((320, 320), Image.LANCZOS)
+        except:
+            return Image.new("RGBA", (320, 320), (255,255,255,0))
+
+    home_logo = get_logo(home_logo_url)
+    away_logo = get_logo(away_logo_url)
+
+    # Paste logos centered - NO BLACK SPACE - cover entire
+    bg.paste(home_logo, (120, 300), home_logo)
+    bg.paste(away_logo, (640, 300), away_logo)
+
+    # VS text
+    try: font_bold = ImageFont.truetype("arial.ttf", 80)
+    except: font_bold = ImageFont.load_default()
+    try: font_small = ImageFont.truetype("arial.ttf", 40)
+    except: font_small = ImageFont.load_default()
+
+    draw.text((W//2-40, 400), "VS", fill=(255,255,255), font=font_bold, anchor="mm")
+    
+    # Teams
+    draw.text((280, 680), home[:15], fill="white", font=font_bold, anchor="mm")
+    draw.text((800, 680), away[:15], fill="white", font=font_bold, anchor="mm")
+    
+    # Score / Status
+    draw.text((W//2, 780), score_text, fill=(0, 255, 136), font=font_bold, anchor="mm")
+    
+    # League
+    draw.text((W//2, 850), league, fill=(200,200,200), font=font_small, anchor="mm")
+
+    # === POP UP Unfiltered Scores - Watermark ===
+    # Semi-transparent banner bottom
+    overlay = Image.new("RGBA", (W, 120), (0, 255, 136, 230))
+    bg.paste(overlay, (0, H-120), overlay)
+    draw = ImageDraw.Draw(bg)
+    draw.text((W//2, H-60), "UNFILTERED SCORES • LIVE", fill="black", font=font_bold, anchor="mm")
+
+    # Save high quality - iPhone clear
+    path = f"/tmp/{home}_{away}.jpg"
+    bg.save(path, "JPEG", quality=95, optimize=True)
+    return path
+
+def fb_post_with_image(message, image_path):
+    url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
+    with open(image_path, "rb") as f:
+        files = {"source": f}
+        data = {"caption": message, "access_token": FB_TOKEN}
+        r = requests.post(url, files=files, data=data, timeout=30)
+        print(f"FB PHOTO POST: {r.status_code} {r.text[:200]}")
+        return r
+
+def fb_post_text(message):
+    url = f"https://graph.facebook.com/{FB_PAGE_ID}/feed"
+    data = {"message": message, "access_token": FB_TOKEN}
+    r = requests.post(url, data=data, timeout=20)
+    print(f"FB TEXT: {r.status_code}")
+    return r
+
+# === NEWS WITH IMAGE - NO REPETITION ===
+def fetch_football_news():
+    news_items = []
+    # Try NewsAPI if key exists
+    if NEWS_KEY:
+        try:
+            url = f"https://newsapi.org/v2/everything?q=football+Premier League&language=en&sortBy=publishedAt&pageSize=10&apiKey={NEWS_KEY}"
+            r = requests.get(url, timeout=15).json()
+            for art in r.get("articles", [])[:5]:
+                if art.get("urlToImage"):
+                    news_items.append({"title": art["title"], "image": art["urlToImage"], "url": art["url"]})
         except: pass
-    return out
+    
+    # Fallback - BBC RSS style + ESPN images
+    if not news_items:
+        fallback = [
+            {"title": "Transfer News Live: Big moves expected", "image": "https://images.unsplash.com/photo-1574629810360-214f3770f775?w=1080", "url": ""},
+            {"title": "Premier League Form Guide", "image": "https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=1080", "url": ""},
+        ]
+        news_items = fallback
+    return news_items
+
+def create_news_image(title, news_image_url):
+    W, H = 1080, 1080
+    try:
+        r = requests.get(news_image_url, timeout=10)
+        bg = Image.open(BytesIO(r.content)).convert("RGB")
+        # COVER - No black space - crop to fill
+        bg = bg.resize((W, H), Image.LANCZOS)
+        # Blur overlay for text readability
+        overlay = Image.new("RGBA", (W, H), (0,0,0,100))
+        bg = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
+    except:
+        bg = Image.new("RGB", (W, H), (10,15,25))
+
+    draw = ImageDraw.Draw(bg)
+    try: font = ImageFont.truetype("arial.ttf", 55)
+    except: font = ImageFont.load_default()
+
+    # Title wrapped
+    words = title.split()
+    lines = []
+    line = ""
+    for w in words:
+        if len(line + " " + w) < 35: line += " " + w
+        else: lines.append(line); line = w
+    lines.append(line)
+    
+    y = 350
+    for l in lines[:3]:
+        draw.text((W//2, y), l.strip(), fill="white", font=font, anchor="mm", stroke_width=2, stroke_fill="black")
+        y += 70
+
+    # Unfiltered Scores pop up
+    banner = Image.new("RGBA", (W, 120), (0, 255, 136, 230))
+    bg.paste(banner, (0, H-120), banner)
+    draw.text((W//2, H-60), "UNFILTERED SCORES", fill="black", font=font, anchor="mm")
+    
+    path = f"/tmp/news_{int(datetime.now().timestamp())}.jpg"
+    bg.save(path, "JPEG", quality=95)
+    return path
 
 def main():
-    print("🟢 V48 FINAL - NO LOOP - START")
-    m=load_mem()
-    live=ls_live()+espn_live()
-    merged={}
-    for g in live:
-        if g["norm"] not in merged: merged[g["norm"]]=g
-    live=list(merged.values()); print(f"LIVE {len(live)}")
-    for g in live:
-        norm=g["norm"]; lg=clean_lg(g["lg"]); t=tags(lg); gh=g["gh"]; ga=g["ga"]
-        last=m["scores"].get(norm,{"gh":0,"ga":0})
-        if gh<last["gh"] or ga<last["ga"]: continue
-        st=g["st"]; is_ft="FT" in st; is_ht="HT" in st; is_ns=st in ["NS","","Pre"] or "vs" in st.lower()
-        lineup_k=f"lineup-{norm}"; kick=f"kick-{norm}"; goal=f"goal-{norm}-{gh}-{ga}"; ft=f"ft-{norm}"; ht=f"ht-{norm}"
-        if lineup_k not in m["posted"] and is_ns and is_lineup_league(g["lg"]):
-            if fb_text(f"🔜 COMING UP: {g['h']} vs {g['a']}\n🏆 {lg}\n⏰ Lineup soon! Predict 👇\n\n{t}"): m["posted"][lineup_k]=1; continue
-        if kick not in m["posted"] and not is_ns:
-            if fb_text(f"⚽ KICKOFF: {g['h']} vs {g['a']}\n{lg} LIVE!\n\n{t}"): m["posted"][kick]=1; m["scores"][norm]={"gh":gh,"ga":ga}; continue
-        if not is_ft and not is_ht and gh+ga>0 and goal not in m["posted"] and (gh>last["gh"] or ga>last["ga"]):
-            if fb_text(f"⚽ GOOAL! {g['m']}' {g['h']} {gh}-{ga} {g['a']}!\n{lg}\n\n{t}"): m["posted"][goal]=1; m["scores"][norm]={"gh":gh,"ga":ga}
-        if is_ht and ht not in m["posted"]:
-            if fb_text(f"⏸️ HALF: {g['h']} {gh}-{ga} {g['a']}\n{lg}\n\n{t}"): m["posted"][ht]=1
-        if is_ft and ft not in m["posted"] and norm in m["scores"]:
-            if fb_text(f"✅ FULL TIME: {g['h']} {gh}-{ga} {g['a']}\n{lg}\n\n{t}"): m["posted"][ft]=1
-    save_mem(m); print("✅ DONE - EXIT IN 20 SECONDS - NO LOOP")
+    posted = load_posted()
+    # ... your existing fixture fetching code ...
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = "https://v3.football.api-sports.io/fixtures"
+    headers = {"x-apisports-key": FOOTBALL_KEY}
+    params = {"date": today}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=20)
+        fixtures = r.json().get("response", [])
+    except:
+        fixtures = []
 
-if __name__=="__main__": main()
+    for fx in fixtures:
+        league_id = fx["league"]["id"]
+        if league_id not in ALLOWED_LEAGUE_IDS: continue
+        fixture_id = fx["fixture"]["id"]
+        status = fx["fixture"]["status"]["short"]
+        home = fx["teams"]["home"]["name"]
+        away = fx["teams"]["away"]["name"]
+        league_name = ALLOWED_LEAGUE_IDS[league_id]
+        home_logo = fx["teams"]["home"]["logo"]
+        away_logo = fx["teams"]["away"]["logo"]
+        goals_h = fx["goals"]["home"]
+        goals_a = fx["goals"]["away"]
+
+        if status in ["1H", "HT", "2H"]:
+            key = f"kickoff_{fixture_id}"
+            if key in posted: continue
+            img = create_match_image(home, away, league_name, f"{goals_h} - {goals_a}" if goals_h is not None else "LIVE", home_logo, away_logo, "KICKOFF")
+            msg = f"🟢 ⚽ KICKOFF: {home} vs {away}\n{league_name} LIVE!\n\n#FootballLive #UnfilteredScores"
+            fb_post_with_image(msg, img)
+            posted.add(key); save_posted(posted)
+
+    # === POST NEWS - 1 per run max, no repeat ===
+    news_key = f"news_{today}_{datetime.now().hour}"
+    if news_key not in posted:
+        news_list = fetch_football_news()
+        if news_list:
+            n = random.choice(news_list)
+            img = create_news_image(n["title"], n["image"])
+            msg = f"🚨 {n['title']}\n\n#FootballNews #UnfilteredScores #EPL #LaLiga #UCL"
+            fb_post_with_image(msg, img)
+            posted.add(news_key); save_posted(posted)
+
+if __name__ == "__main__":
+    main()

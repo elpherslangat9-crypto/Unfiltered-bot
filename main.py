@@ -12,10 +12,11 @@ today=now_eat.strftime("%Y-%m-%d")
 today_ls=now_eat.strftime("%Y%m%d")
 
 ALL_LEAGUES={39:"Premier League",140:"La Liga",2:"Champions League",3:"Europa League",78:"Bundesliga",135:"Serie A",61:"Ligue 1",88:"Eredivisie",94:"Primeira Liga",40:"Championship",204:"Kenya FKF",202:"Tanzania",203:"Uganda",201:"Rwanda",233:"Egypt",235:"Botola",236:"Algeria",237:"Tunisia",238:"South Africa PSL",239:"Nigeria NPFL",6:"CAF Champions",400:"AFCON"}
-AFRICA_WORDS=["kenya","tanzania","uganda","rwanda","egypt","morocco","botola","algeria","tunisia","psl","south africa","nigeria","npfl","caf","afcon","ethiopia","zambia","gor mahia","simba","yanga"]
 
-# ESPN leagues for Europe backup
-ESPN_LEAGUES=["eng.1","esp.1","ger.1","ita.1","fra.1","eng.2","ned.1","por.1","uefa.champions","uefa.europa","caf.champions","caf.nations"]
+# ONLY THESE WORDS ALLOWED IN FREE BACKUP - NO HUNGARY!
+ALLOWED_WORDS=["premier league","la liga","bundesliga","serie a","ligue 1","eredivisie","primeira liga","championship","champions league","europa league","eng.1","esp.1","ger.1","ita.1","fra.1","ned.1","por.1","uefa","kenya","tanzania","uganda","rwanda","egypt","morocco","botola","algeria","tunisia","psl","south africa","nigeria","npfl","caf","afcon","gor mahia","simba","yanga","al ahly","zamalek","raja","wydad"]
+
+ESPN_LEAGUES=["eng.1","esp.1","ger.1","ita.1","fra.1","ned.1","por.1","uefa.champions","uefa.europa"]
 
 def load_posted():
     try:
@@ -48,9 +49,9 @@ def fb_post(msg):
     except Exception as e: print(f"FB err {e}"); return False
 
 def fetch_fixtures():
-    if not FOOTBALL_KEY: print("No API key"); return []
+    if not FOOTBALL_KEY: return []
     if get_count()>=85:
-        print(f"API count {get_count()} >=85 - SKIP API, use FREE backup!")
+        print(f"API count {get_count()} >=85 - SKIP API, use FREE!")
         return []
     try:
         r=requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key":FOOTBALL_KEY}, params={"date":today}, timeout=15)
@@ -68,27 +69,29 @@ def fetch_events(fid):
         save_count(get_count()+1); return r.json().get("response",[])
     except: return []
 
+def is_allowed(league_name):
+    low=league_name.lower()
+    return any(w in low for w in ALLOWED_WORDS)
+
 def fetch_free_livescore_all():
-    """Livescore FREE backup - Europe + Africa"""
     games=[]
     try:
         url=f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today_ls}/3.00?MD=1"
         r=requests.get(url, timeout=12, headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.livescore.com/"})
-        stages=r.json().get("Stages",[])
-        for stage in stages:
+        for stage in r.json().get("Stages",[]):
             comp=stage.get("Cnm","")+" "+stage.get("Snm","")
+            if not is_allowed(comp): continue
             for ev in stage.get("Events",[]):
                 status=ev.get("Eps","")
                 if status in ["1H","2H","HT","LIVE"] or status.isdigit():
                     t1=ev.get("T1",[{}]); t2=ev.get("T2",[{}])
                     home=t1[0].get("Nm","") if t1 else ""; away=t2[0].get("Nm","") if t2 else ""
                     games.append({"home":home,"away":away,"hg":int(ev.get("Tr1",0) or 0),"ag":int(ev.get("Tr2",0) or 0),"status":status,"league":comp,"source":"livescore"})
-        print(f"Livescore FREE ALL (Europe+Africa): {len(games)}")
+        print(f"Livescore FREE (filtered Top+Africa): {len(games)}")
     except Exception as e: print(f"Livescore err {e}")
     return games
 
 def fetch_free_espn():
-    """ESPN FREE backup - Europe"""
     games=[]
     try:
         for lg in ESPN_LEAGUES:
@@ -100,6 +103,7 @@ def fetch_free_espn():
                     status=ev.get("status",{}).get("type",{}).get("state","")
                     if status!="in": continue
                     comp=ev.get("league",{}).get("name",lg)
+                    if not is_allowed(comp): continue
                     competitors=ev.get("competitions",[{}])[0].get("competitors",[])
                     if len(competitors)<2: continue
                     home=competitors[0].get("team",{}).get("displayName","") if competitors[0].get("homeAway")=="home" else competitors[1].get("team",{}).get("displayName","")
@@ -108,24 +112,18 @@ def fetch_free_espn():
                     ag=int(competitors[1].get("score",0)) if competitors[0].get("homeAway")=="home" else int(competitors[0].get("score",0))
                     games.append({"home":home,"away":away,"hg":hg,"ag":ag,"status":"LIVE","league":comp,"source":"espn"})
             except: continue
-        print(f"ESPN FREE: {len(games)}")
+        print(f"ESPN FREE (filtered): {len(games)}")
     except Exception as e: print(f"ESPN err {e}")
     return games
 
 def main():
-    posted=load_posted(); print(f"=== V71 TRIPLE BACKUP TIME {now_eat} POSTED {len(posted)} COUNT {get_count()} ===")
+    posted=load_posted(); print(f"=== V72 FILTERED TIME {now_eat} POSTED {len(posted)} COUNT {get_count()} ===")
     fixtures=fetch_fixtures()
     free_all=fetch_free_livescore_all()
     espn_games=fetch_free_espn()
-
-    # If API depleted or 0, use FREE for everything
     use_free = len(fixtures)==0 or get_count()>=85
-    if use_free:
-        print(f"USING FREE BACKUP MODE! Livescore {len(free_all)} + ESPN {len(espn_games)}")
-    else:
-        print(f"API MODE: {len(fixtures)} fixtures")
+    print(f"API {len(fixtures)} FREE_MODE={use_free} Livescore {len(free_all)} ESPN {len(espn_games)}")
 
-    # API MODE - detailed goals/red/pen
     for fx in fixtures:
         if fx["league"]["id"] not in ALL_LEAGUES: continue
         home=fx["teams"]["home"]["name"]; away=fx["teams"]["away"]["name"]; hg=fx["goals"]["home"]; ag=fx["goals"]["away"]
@@ -162,9 +160,7 @@ def main():
             if k not in posted:
                 if fb_post(f"✅ FT: {home} {hg}-{ag} {away}\n\n🏆 {league}"): posted.add(k)
 
-    # FREE BACKUP MODE - Livescore + ESPN (score change detection)
-    all_free = free_all + espn_games
-    # Deduplicate by home_away
+    all_free=free_all+espn_games
     seen={}
     for g in all_free:
         key=f"{g['home']}_{g['away']}"
@@ -176,10 +172,8 @@ def main():
         hg=g["hg"]; ag=g["ag"]; league=g["league"]; source=g["source"]; score=f"{hg}-{ag}"; fid=f"{home}_{away}"
         k=f"free_{fid}_{score}_{today}_{source}"
         if k not in posted and hg+ag>0:
-            # Only post if score changed
-            prev_keys=[x for x in posted if f"free_{fid}_" in x]
-            if fb_post(f"🟢 LIVE ({source.upper()}): {home} {score} {away}\n\n🏆 {league}\n\n#LiveScore"): posted.add(k)
+            if fb_post(f"🟢 LIVE ({source.upper()}): {home} {score} {away}\n\n🏆 {league}"): posted.add(k)
 
-    save_posted(posted); print(f"V71 DONE posted={len(posted)} API_count={get_count()} FREE_MODE={use_free}")
+    save_posted(posted); print(f"V72 DONE posted={len(posted)} API_count={get_count()} FREE_MODE={use_free}")
 
 if __name__=="__main__": main()

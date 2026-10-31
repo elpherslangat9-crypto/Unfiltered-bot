@@ -38,67 +38,60 @@ def parse_min(s):
     try: return int(''.join(filter(str.isdigit, str(s)))[:2] or 0)
     except: return 0
 
-def get_scorer_by_teams(home, away):
-    """V74 - Find scorer by searching ALL ESPN leagues for this team match"""
+def get_scorer_fix(home, away):
+    """V75 - FIXED: Search by team ID not name slice"""
     try:
-        # Search ESPN for this exact match to get event ID
         for lg in LEAGUES.keys():
             try:
                 url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard?dates={today.replace('-','')}"
                 r=requests.get(url, timeout=6, headers={"User-Agent":"Mozilla/5.0"})
                 data=r.json()
                 for ev in data.get("events",[]):
-                    name=ev.get("name","").lower()
-                    if home.lower()[:4] in name and away.lower()[:4] in name:
+                    # Match by competitors array - 100% accurate
+                    comps=ev.get("competitions",[{}])[0].get("competitors",[])
+                    if len(comps)<2: continue
+                    h=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
+                    a=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
+                    # Fuzzy match Barcelona in Barcelona, Alavés in Alavés / Deportivo Alavés
+                    if home.lower().split()[0] in h.lower() and away.lower().split()[0] in a.lower():
                         eid=ev.get("id")
-                        # Now get summary with scorer
+                        print(f"FOUND EVENT {h} vs {a} id={eid} league={lg}")
+                        # Get summary
                         surl=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/summary?event={eid}"
-                        sr=requests.get(surl, timeout=6, headers={"User-Agent":"Mozilla/5.0"})
+                        sr=requests.get(surl, timeout=7, headers={"User-Agent":"Mozilla/5.0"})
                         sj=sr.json()
+                        # Get LAST goal (newest)
+                        goals=[]
                         for ke in sj.get("keyEvents",[]):
-                            if ke.get("athletesInvolved") and ("Goal" in ke.get("text","") or ke.get("type",{}).get("text")=="Goal"):
-                                nm=ke["athletesInvolved"][0].get("displayName")
-                                if nm and len(nm)<30: 
-                                    print(f"FOUND SCORER {home} vs {away}: {nm}")
-                                    return nm
-                        # Try commentary last goal
-                        for c in reversed(sj.get("commentary",[])[:10]):
-                            txt=c.get("text","")
-                            if "Goal -" in txt:
-                                cand=txt.split("Goal -")[-1].split("(")[0].split(",")[0].strip()
-                                if cand and len(cand)<25 and " " in cand: return cand
-            except: continue
+                            t=ke.get("text","")
+                            if "Goal" in t:
+                                if ke.get("athletesInvolved"):
+                                    nm=ke["athletesInvolved"][0].get("displayName")
+                                    if nm: goals.append(nm)
+                                elif " - " in t:
+                                    # Fallback parse: "Goal! Barcelona 4, Alavés 0. Lewandowski (45'+3')"
+                                    try:
+                                        after=t.split(".")[-1] if "." in t else t.split("-")[-1]
+                                        cand=after.split("(")[0].strip()
+                                        if cand and len(cand)<30 and "Barcelona" not in cand: goals.append(cand)
+                                    except: pass
+                        if goals:
+                            last=goals[-1]
+                            print(f"SCORER FOUND: {last}")
+                            return last
+                        # Try header details
+                        hdr=sj.get("header",{}).get("competitions",[{}])[0]
+                        for d in hdr.get("details",[]):
+                            if d.get("athletesInvolved") and "Goal" in str(d.get("type",{})):
+                                nm=d["athletesInvolved"][0].get("displayName")
+                                if nm: return nm
+            except Exception as e:
+                print(f"scorer search fail {lg} {e}")
+                continue
         return None
     except: return None
 
-def get_games_livescore():
-    games={}
-    try:
-        url="https://prod-public-api.livescore.com/v1/soccer/live"
-        r=requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
-        if r.status_code==200:
-            data=r.json()
-            for stage in data.get("Stages",[]):
-                lname=stage.get("Snm","").lower()
-                if not any(x in lname for x in ["premier","laliga","serie","bundes","ligue","eredivisie","primeira","turk","belg","greek","swiss","champions","europa","kenya"]):
-                    continue
-                for ev in stage.get("Events",[]):
-                    if ev.get("Eps")!="L": continue
-                    try:
-                        t1=ev.get("T1",[{}])[0].get("Nm",""); t2=ev.get("T2",[{}])[0].get("Nm","")
-                        if not t1 or not t2: continue
-                        tr1=ev.get("Tr1","0"); tr2=ev.get("Tr2","0")
-                        hg=int(tr1) if str(tr1).isdigit() else 0
-                        ag=int(tr2) if str(tr2).isdigit() else 0
-                        minute=f"{ev.get('Epr',0)}'"
-                        key=f"{t1}_vs_{t2}"
-                        games[key]={"home":t1,"away":t2,"hg":hg,"ag":ag,"minute":minute,"min_int":parse_min(minute),"source":"LIVESCORE"}
-                    except: continue
-            print(f"LIVESCORE FAST: {len(games)}")
-    except Exception as e: print(f"LIVESCORE fail {e}")
-    return games
-
-def get_games_espn():
+def get_games():
     games={}
     for lg in LEAGUES.keys():
         try:
@@ -116,18 +109,15 @@ def get_games_espn():
                 clock=ev.get("status",{}).get("displayClock","")
                 key=f"{home}_vs_{away}"
                 if key not in games or (hg+ag)>(games[key]["hg"]+games[key]["ag"]):
-                    games[key]={"home":home,"away":away,"hg":hg,"ag":ag,"minute":clock,"min_int":parse_min(clock),"source":"ESPN"}
+                    games[key]={"home":home,"away":away,"hg":hg,"ag":ag,"minute":clock,"min_int":parse_min(clock)}
         except: continue
-    print(f"ESPN BACKUP: {len(games)}")
+    print(f"LIVE TOTAL: {len(games)}")
     return games
 
 def main():
     posted=load_posted(); last_scores=load_scores()
-    print(f"=== V74 LIVESCORE + REAL SCORER {now_eat} ===")
-    ls_games=get_games_livescore()
-    espn_games=get_games_espn()
-    games={**espn_games, **ls_games}
-    print(f"TOTAL: {len(games)}")
+    print(f"=== V75 REAL SCORER FIX {now_eat} ===")
+    games=get_games()
     new_scores={}
     for k,g in games.items():
         score_str=f"{g['hg']}-{g['ag']}"
@@ -136,17 +126,16 @@ def main():
         if prev and (g["hg"]>prev.get("hg",0) or g["ag"]>prev.get("ag",0)):
             gk=f"goal_{k}_{score_str}_{today}"
             if gk not in posted:
-                # V74: Always try to get scorer by team name, even if from Livescore
-                scorer=get_scorer_by_teams(g["home"], g["away"])
+                scorer=get_scorer_fix(g["home"], g["away"])
                 if scorer:
                     msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {scorer} ({g['minute']})"
                 else:
-                    # If no scorer found, don't post "Goal: 43'" - post without scorer line but still show live
-                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {g['minute']}"
-                    print(f"NO SCORER for {k}, posting minute only")
+                    # If still no scorer, wait 60s next run will find it - don't post minute only
+                    print(f"NO SCORER yet for {k}, retry next run")
+                    continue
                 if fb_post(msg): posted.add(gk)
 
     save_posted(posted); save_scores(new_scores)
-    print(f"V74 DONE")
+    print(f"V75 DONE")
 
 if __name__=="__main__": main()

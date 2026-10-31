@@ -15,66 +15,60 @@ ALLOWED=["premier league","la liga","bundesliga","serie a","ligue 1","eredivisie
 
 def load_posted():
     try:
-        with open(POSTED_FILE,"r") as f:
-            d=json.load(f); print(f"Loaded {len(d)} posted from ARTIFACT"); return set(d)
-    except: print("No posted.json"); return set()
-
+        with open(POSTED_FILE,"r") as f: return set(json.load(f))
+    except: return set()
 def save_posted(p):
     if len(p)==0: p.add(f"init_{today}")
     try:
         with open(POSTED_FILE,"w") as f: json.dump(list(p)[-5000:], f)
-        print(f"Saved {len(p)} posted")
-    except Exception as e: print(f"Save err {e}")
-
+    except: pass
 def load_scores():
     try:
-        with open(SCORES_FILE,"r") as f:
-            d=json.load(f); print(f"Loaded {len(d)} last scores"); return d
-    except: print("No last_scores.json"); return {}
-
+        with open(SCORES_FILE,"r") as f: return json.load(f)
+    except: return {}
 def save_scores(s):
     try:
         with open(SCORES_FILE,"w") as f: json.dump(s, f)
-        print(f"Saved {len(s)} last scores")
-    except Exception as e: print(f"Score save err {e}")
+    except: pass
 
 def fb_post(msg):
     try:
         r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data={"message":msg,"access_token":FB_TOKEN}, timeout=20)
-        print(f"FB {r.status_code}: {msg[:130]}"); return r.status_code==200
+        print(f"FB {r.status_code}: {msg[:150]}"); return r.status_code==200
     except Exception as e: print(f"FB err {e}"); return False
 
-def allowed(name):
-    return any(w in name.lower() for w in ALLOWED)
+def allowed(name): return any(w in name.lower() for w in ALLOWED)
 
-def fetch_livescore():
-    games=[]
+def get_scorer_espn(event_id, league_code):
+    """Try to get last scorer from ESPN summary"""
     try:
-        url=f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today_ls}/3.00?MD=1"
-        r=requests.get(url, timeout=12, headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.livescore.com/"})
+        url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
+        r=requests.get(url, timeout=6, headers={"User-Agent":"Mozilla/5.0"})
         data=r.json()
-        for stage in data.get("Stages",[]):
-            comp=stage.get("Cnm","")+" "+stage.get("Snm","")
-            if not allowed(comp): continue
-            for ev in stage.get("Events",[]):
-                eps=ev.get("Eps",""); # LIVE status
-                if eps not in ["1H","2H","HT","ET"] and not (isinstance(eps,str) and eps.isdigit()): continue
-                t1=ev.get("T1",[{}]); t2=ev.get("T2",[{}])
-                home=t1[0].get("Nm","") if t1 else ""; away=t2[0].get("Nm","") if t2 else ""
-                if not home or not away: continue
-                hg=int(ev.get("Tr1",0) or 0); ag=int(ev.get("Tr2",0) or 0)
-                # minute
-                try: minute=int(ev.get("Esd",0) or eps or 0) if str(eps).isdigit() else int(ev.get("Esd",0) or 0)
-                except: minute=0
-                games.append({"key":f"{home}_vs_{away}","home":home,"away":away,"hg":hg,"ag":ag,"league":comp,"minute":minute,"source":"LIVESCORE","status":eps})
-        print(f"LIVESCORE: {len(games)}")
-    except Exception as e: print(f"LS err {e}")
-    return games
+        # Check scoring plays
+        for play in data.get("header",{}).get("competitions",[{}])[0].get("details",[]):
+            pass
+        # Check commentary / keyEvents
+        for item in data.get("commentary",[])[:5]:
+            txt=item.get("text","")
+            if "goal" in txt.lower() or "score" in txt.lower():
+                # try extract name
+                if "-" in txt: return txt.split("-")[-1][:40].strip()
+        # Check boxscore scoring
+        for team in data.get("boxscore",{}).get("players",[]):
+            for pl in team.get("statistics",[]):
+                for st in pl.get("keys",[]):
+                    pass
+        # Last scoring play from header
+        plays=data.get("header",{}).get("competitions",[{}])[0].get("situation",{}).get("lastPlay",{}).get("text","")
+        if plays and len(plays)>5: return plays[:50]
+        return None
+    except: return None
 
-def fetch_flashscore_backup():
+def fetch_games():
     games=[]
     try:
-        for lg in ["eng.1","esp.1","ger.1","ita.1","fra.1","ned.1","por.1","uefa.champions","uefa.europa","ken.1","rsa.1"]:
+        for lg in ["eng.1","esp.1","ger.1","ita.1","fra.1","ned.1","por.1","uefa.champions","uefa.europa","ken.1","rsa.1","ecu.1"]:
             try:
                 url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard?dates={today.replace('-','')}"
                 r=requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
@@ -85,77 +79,71 @@ def fetch_flashscore_backup():
                     if not allowed(comp): continue
                     comps=ev.get("competitions",[{}])[0].get("competitors",[])
                     if len(comps)<2: continue
+                    eid=ev.get("id","")
                     home=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
                     away=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
                     hg=int(comps[0].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[1].get("score",0))
                     ag=int(comps[1].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[0].get("score",0))
-                    minute=ev.get("status",{}).get("displayClock","0")
-                    try: min_i=int(''.join(filter(str.isdigit, minute))[:2] or 0)
+                    clock=ev.get("status",{}).get("displayClock","0")
+                    try: min_i=int(''.join(filter(str.isdigit, clock))[:3] or 0)
                     except: min_i=0
-                    games.append({"key":f"{home}_vs_{away}","home":home,"away":away,"hg":hg,"ag":ag,"league":comp,"minute":min_i,"source":"FLASHSCORE","status":"LIVE"})
+                    # try get scorer
+                    scorer=get_scorer_espn(eid, lg)
+                    games.append({"key":f"{home}_vs_{away}","home":home,"away":away,"hg":hg,"ag":ag,"league":comp,"minute":min_i,"scorer":scorer,"eid":eid})
             except: continue
-        print(f"FLASHSCORE: {len(games)}")
-    except Exception as e: print(f"FS err {e}")
+        print(f"GAMES LIVE: {len(games)}")
+    except Exception as e: print(f"Fetch err {e}")
     return games
 
 def main():
     posted=load_posted()
-    last_scores=load_scores() # dict: "Home_vs_Away" -> {"score":"1-0","league":"...","hg":1,"ag":0}
-    print(f"=== V73.1 PURE LIVESCORE TIME {now_eat} POSTED {len(posted)} TRACKED {len(last_scores)} ===")
-
-    ls=fetch_livescore()
-    fs=fetch_flashscore_backup()
-    all_games=ls+fs
-
-    # Merge - keep latest score (highest total)
+    last_scores=load_scores()
+    print(f"=== V73.2 MATCH CORNER STYLE {now_eat} POSTED {len(posted)} ===")
     merged={}
-    for g in all_games:
+    for g in fetch_games():
         k=g["key"]
         if k not in merged or (g["hg"]+g["ag"]) > (merged[k]["hg"]+merged[k]["ag"]):
             merged[k]=g
-
     new_scores={}
-    # --- LIVE TRACKING ---
     for k,g in merged.items():
-        home=g["home"]; away=g["away"]; hg=g["hg"]; ag=g["ag"]; league=g["league"]; minute=g["minute"]; source=g["source"]
+        home=g["home"]; away=g["away"]; hg=g["hg"]; ag=g["ag"]; league=g["league"]; minute=g["minute"]; scorer=g.get("scorer")
         score_str=f"{hg}-{ag}"
         new_scores[k]={"score":score_str,"league":league,"hg":hg,"ag":ag,"minute":minute}
-
-        prev_data=last_scores.get(k)
-        if not prev_data:
-            # KICKOFF - new game
+        prev=last_scores.get(k)
+        if not prev:
             pk=f"kick_{k}_{today}"
             if pk not in posted:
-                if fb_post(f"🟢 KICKOFF: {home} vs {away}\n\n🏆 {league}\n📡 {source}"): posted.add(pk)
+                msg=f"🟢 KICK-OFF: {home} vs {away}\n\n🏆 {league}\n⏰ {minute}'"
+                if fb_post(msg): posted.add(pk)
         else:
-            prev_hg=prev_data.get("hg",0); prev_ag=prev_data.get("ag",0)
-            # GOAL?
+            prev_hg=prev.get("hg",0); prev_ag=prev.get("ag",0)
             if hg>prev_hg or ag>prev_ag:
                 gk=f"goal_{k}_{score_str}_{today}"
                 if gk not in posted:
+                    # MATCH CORNER STYLE
                     if hg>prev_hg and ag==prev_ag:
-                        msg=f"⚽ GOAL! {home} {score_str} {away} ({minute}')\n\n🏆 {league}\n📡 {source}"
+                        base=f"🟢 GOAL! {minute}' - {home} {score_str} {away}\n\n🏆 {league}"
                     elif ag>prev_ag and hg==prev_hg:
-                        msg=f"⚽ GOAL! {away} scores! {home} {score_str} {away} ({minute}')\n\n🏆 {league}\n📡 {source}"
+                        base=f"🟢 GOAL! {minute}' - {home} {score_str} {away}\n\n🏆 {league}"
                     else:
-                        msg=f"⚽ GOALS! {home} {score_str} {away} ({minute}')\n\n🏆 {league}\n📡 {source}"
-                    if fb_post(msg): posted.add(gk)
-                    print(f"GOAL {k}: {prev_data.get('score')} -> {score_str}")
+                        base=f"🟢 GOALS! {minute}' - {home} {score_str} {away}\n\n🏆 {league}"
+                    if scorer and len(scorer)>3:
+                        base+=f"\n⚽ Scorer: {scorer}"
+                    # brand footer
+                    base+=f"\n\n🟢 Live Updates"
+                    if fb_post(base): posted.add(gk)
+                    print(f"GOAL {k} {prev.get('score')}->{score_str} scorer={scorer}")
 
-    # --- FT TRACKING: was live before, now not live = finished ---
-    for k, prev_data in last_scores.items():
+    # FT
+    for k, prev in last_scores.items():
         if k not in new_scores:
-            # Match finished
-            score=prev_data.get("score","0-0"); league=prev_data.get("league","")
-            fk=f"ft_{k}_{score}_{today}"
+            fk=f"ft_{k}_{prev.get('score')}_{today}"
             if fk not in posted:
-                home, away = k.split("_vs_")
-                if fb_post(f"✅ FT: {home} {score} {away}\n\n🏆 {league}"):
-                    posted.add(fk)
-                    print(f"FT {k} {score}")
+                h,a=k.split("_vs_")
+                msg=f"🟢 FULL-TIME: {h} {prev.get('score')} {a}\n\n🏆 {prev.get('league')}\n\n🟢 Live Updates"
+                if fb_post(msg): posted.add(fk)
 
-    save_posted(posted)
-    save_scores(new_scores)
-    print(f"V73.1 DONE posted={len(posted)} tracking={len(new_scores)}")
+    save_posted(posted); save_scores(new_scores)
+    print(f"V73.2 DONE posted={len(posted)} tracking={len(new_scores)}")
 
 if __name__=="__main__": main()

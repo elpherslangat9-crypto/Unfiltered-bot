@@ -1,32 +1,46 @@
-name: V48 LIVE
+name: live
+
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/5 * * * *'   # every 5 mins - GitHub loves it
   workflow_dispatch:
+
 jobs:
-  live:
+  post:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      
+      # THIS IS THE KEY - SAVE posted.json!
+      - uses: actions/cache@v4
+        with:
+          path: |
+            posted.json
+            /tmp/api_count.json
+          key: posted-${{ hashFiles('posted.json') }}
+          restore-keys: |
+            posted-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests pillow
-      - env:
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+
+      - name: Install deps
+        run: pip install requests Pillow
+
+      - name: Run Bot
+        env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
-          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          API_FOOTBALL_API_KEY: ${{ secrets.API_FOOTBALL_API_KEY }}
-          MAX_API_REQUESTS: "95"
         run: python main.py
-      - if: always()
+
+      - name: Save posted.json
         run: |
           git config user.name "bot"
           git config user.email "bot@bot.com"
-          git add posted.json posted_v38.json scores_v38.json schedule.json news_titles.json -f || true
-          git commit -m "V48 auto save" || true
+          git add posted.json || true
+          git commit -m "save posted" || true
           git push || true

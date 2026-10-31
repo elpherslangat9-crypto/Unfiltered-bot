@@ -1,4 +1,4 @@
-name: live
+name: post
 on:
   schedule:
     - cron: '*/5 * * * *'
@@ -13,19 +13,24 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: /tmp/api_count.json
-          key: api-count-${{ github.run_id }}
+          key: api-count-v69
           restore-keys: api-count-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install requests
-      - env:
+      - name: Run bot
+        env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
         run: python main.py
-      - run: |
+      - name: Save posted.json
+        run: |
           git config user.name "bot"
           git config user.email "bot@bot.com"
           git pull --rebase || true

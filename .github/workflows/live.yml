@@ -39,7 +39,7 @@ jobs:
           ls -lh posted.json last_scores.json || echo "First run - no files yet"
           wc -l posted.json 2>/dev/null || true
 
-      - name: Run V73.1 Bot
+      - name: Run V75 Bot
         env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}

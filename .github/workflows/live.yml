@@ -1,46 +1,34 @@
 name: live
-
 on:
   schedule:
-    - cron: '*/5 * * * *'   # every 5 mins - GitHub loves it
+    - cron: '*/5 * * * *'
   workflow_dispatch:
-
 jobs:
   post:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      # THIS IS THE KEY - SAVE posted.json!
+        with:
+          fetch-depth: 0
       - uses: actions/cache@v4
         with:
-          path: |
-            posted.json
-            /tmp/api_count.json
-          key: posted-${{ hashFiles('posted.json') }}
-          restore-keys: |
-            posted-
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+          path: /tmp/api_count.json
+          key: api-count-${{ github.run_id }}
+          restore-keys: api-count-
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install deps
-        run: pip install requests Pillow
-
-      - name: Run Bot
-        env:
+      - run: pip install requests
+      - env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
         run: python main.py
-
-      - name: Save posted.json
-        run: |
+      - run: |
           git config user.name "bot"
           git config user.email "bot@bot.com"
+          git pull --rebase || true
           git add posted.json || true
-          git commit -m "save posted" || true
+          git commit -m "save posted [skip ci]" || true
           git push || true

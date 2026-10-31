@@ -32,47 +32,49 @@ def save_scores(s):
 def fb_post(msg):
     try:
         r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data={"message":msg,"access_token":FB_TOKEN}, timeout=20)
-        print(f"FB {r.status_code}: {msg[:150]}"); return r.status_code==200
+        print(f"FB {r.status_code}: {msg}"); return r.status_code==200
     except: return False
 def parse_min(s):
-    try: return int(''.join(filter(str.isdigit, s))[:2] or 0)
+    try: return int(''.join(filter(str.isdigit, str(s)))[:2] or 0)
     except: return 0
 
-def get_real_scorer(eid, lg):
-    """V73.7 - Get REAL player name, not commentary"""
-    try:
-        url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/summary?event={eid}"
-        r=requests.get(url, timeout=7, headers={"User-Agent":"Mozilla/5.0"})
-        j=r.json()
-        # METHOD 1: keyEvents with athletes
-        for ev in j.get("keyEvents",[]):
-            if "Goal" in ev.get("text","") or ev.get("type",{}).get("text")=="Goal":
-                # Try athletesInvolved
-                if ev.get("athletesInvolved"):
-                    name=ev["athletesInvolved"][0].get("displayName")
-                    if name and len(name)<30 and "AC Milan" not in name and "Inter" not in name:
-                        return name
-                # Try text after dash
-                txt=ev.get("text","")
-                if " - " in txt:
-                    cand=txt.split(" - ")[-1].split("(")[0].strip()
-                    if cand and len(cand)<30 and "Milan" not in cand: return cand
-        # METHOD 2: header details athletesInvolved
-        comp=j.get("header",{}).get("competitions",[{}])[0]
-        for det in comp.get("details",[]):
-            if "Goal" in str(det.get("type",{})):
-                ath=det.get("athletesInvolved",[])
-                if ath: 
-                    name=ath[0].get("displayName")
-                    if name and len(name)<30: return name
-        return None # If no real name, return None - don't show fake line
-    except: return None
-
-def main():
-    posted=load_posted(); last_scores=load_scores()
-    print(f"=== V73.7 REAL SCORER FIX {now_eat} ===")
+def get_games_livescore():
+    """FAST SOURCE - Livescore.com - 10s faster than ESPN"""
     games={}
-    for lg, clean_name in LEAGUES.items():
+    try:
+        # Livescore public fast API
+        url="https://prod-public-api.livescore.com/v1/soccer/live"
+        headers={"User-Agent":"Mozilla/5.0","Accept":"application/json"}
+        r=requests.get(url, timeout=8, headers=headers)
+        if r.status_code==200:
+            data=r.json()
+            for stage in data.get("Stages",[]):
+                lname=stage.get("Snm","").lower()
+                # Only our 14 leagues
+                if not any(x in lname for x in ["premier","laliga","serie","bundes","ligue 1","eredivisie","primeira","turk","belg","greek","swiss","champions","europa","kenya"]):
+                    continue
+                for ev in stage.get("Events",[]):
+                    if ev.get("Eps")!="L": continue
+                    try:
+                        t1=ev.get("T1",[{}])[0].get("Nm","")
+                        t2=ev.get("T2",[{}])[0].get("Nm","")
+                        if not t1 or not t2: continue
+                        tr1=ev.get("Tr1","0"); tr2=ev.get("Tr2","0")
+                        hg=int(tr1) if str(tr1).isdigit() else 0
+                        ag=int(tr2) if str(tr2).isdigit() else 0
+                        minute=f"{ev.get('Epr',0)}'"
+                        key=f"{t1}_vs_{t2}"
+                        games[key]={"home":t1,"away":t2,"hg":hg,"ag":ag,"minute":minute,"min_int":parse_min(minute),"source":"LIVESCORE","eid":ev.get("Eid")}
+                    except: continue
+            print(f"LIVESCORE FAST: {len(games)} live games")
+    except Exception as e:
+        print(f"LIVESCORE fail {e}")
+    return games
+
+def get_games_espn():
+    """BACKUP + Scorer names - ESPN"""
+    games={}
+    for lg in LEAGUES.keys():
         try:
             url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard?dates={today.replace('-','')}"
             r=requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
@@ -86,32 +88,60 @@ def main():
                 hg=int(comps[0].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[1].get("score",0))
                 ag=int(comps[1].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[0].get("score",0))
                 clock=ev.get("status",{}).get("displayClock","")
-                eid=ev.get("id")
                 key=f"{home}_vs_{away}"
                 if key not in games or (hg+ag)>(games[key]["hg"]+games[key]["ag"]):
-                    games[key]={"home":home,"away":away,"hg":hg,"ag":ag,"league":clean_name,"minute":clock,"eid":eid,"lg":lg,"min_int":parse_min(clock)}
+                    games[key]={"home":home,"away":away,"hg":hg,"ag":ag,"minute":clock,"min_int":parse_min(clock),"source":"ESPN","eid":ev.get("id"),"lg":lg}
         except: continue
+    print(f"ESPN BACKUP: {len(games)} live games")
+    return games
 
+def get_scorer(eid, lg):
+    if not eid or not lg: return None
+    try:
+        url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/summary?event={eid}"
+        r=requests.get(url, timeout=7, headers={"User-Agent":"Mozilla/5.0"})
+        j=r.json()
+        for ev in j.get("keyEvents",[]):
+            if "Goal" in ev.get("text","") and ev.get("athletesInvolved"):
+                return ev["athletesInvolved"][0].get("displayName")
+        return None
+    except: return None
+
+def main():
+    posted=load_posted(); last_scores=load_scores()
+    print(f"=== V73.9 LIVESCORE + ESPN HYBRID {now_eat} ===")
+    # HYBRID: Livescore FIRST (fast), ESPN SECOND (scorer)
+    ls_games=get_games_livescore()
+    espn_games=get_games_espn()
+    # Merge: Livescore wins for speed, ESPN adds missing
+    games={**espn_games, **ls_games}
+    # If livescore has game, try to enrich with ESPN data for scorer
+    for k in list(games.keys()):
+        if k in espn_games and k in ls_games:
+            games[k]["lg"]=espn_games[k].get("lg")
+            games[k]["eid_espn"]=espn_games[k].get("eid")
+
+    print(f"TOTAL LIVE: {len(games)} (LIVESCORE {len(ls_games)} + ESPN {len(espn_games)})")
     new_scores={}
     for k,g in games.items():
         score_str=f"{g['hg']}-{g['ag']}"
-        new_scores[k]={"score":score_str,"league":g["league"],"hg":g["hg"],"ag":g["ag"]}
+        new_scores[k]={"score":score_str,"hg":g["hg"],"ag":g["ag"]}
         prev=last_scores.get(k)
-        if not prev and g["min_int"]<=15:
-            pk=f"kick_{k}_{today}"
-            if pk not in posted:
-                if fb_post(f"🟢 KICK-OFF\n\n{g['home']} vs {g['away']}\n\n🏆 {g['league']}\n⏰ {g['minute']}\n\n🟢 Unfiltered Scores"): posted.add(pk)
-        elif prev and (g["hg"]>prev.get("hg",0) or g["ag"]>prev.get("ag",0)):
-            gk=f"goal_{k}_{score_str}_{today}"
+        if prev and (g["hg"]>prev.get("hg",0) or g["ag"]>prev.get("ag",0)):
+            gk=f"goal_{k}_{score_str}_{g['minute']}_{today}"
             if gk not in posted:
-                scorer=get_real_scorer(g["eid"], g["lg"])
-                print(f"SCORER {k} -> {scorer}")
-                base=f"🟢 GOAL! {g['minute']}\n\n{g['home']} {score_str} {g['away']}\n\n🏆 {g['league']}"
-                if scorer: base+=f"\n⚽ {scorer}" # Only if real name found
-                base+=f"\n\n🟢 Unfiltered Scores"
-                if fb_post(base): posted.add(gk)
+                # Get scorer from ESPN if we have it
+                lg=g.get("lg") or g.get("lg_espn") or "eng.1"
+                eid=g.get("eid_espn") or g.get("eid")
+                scorer=get_scorer(eid, lg) if g.get("source")=="ESPN" or "eid_espn" in g else None
+                if scorer:
+                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {scorer} ({g['minute']})"
+                else:
+                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {g['minute']}"
+                print(f"POSTING FROM {g['source']}: {msg}")
+                if fb_post(msg): posted.add(gk)
 
     save_posted(posted); save_scores(new_scores)
-    print(f"V73.7 DONE")
+    print(f"V73.9 DONE - LIVESCORE PRIMARY")
 
 if __name__=="__main__": main()

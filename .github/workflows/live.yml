@@ -1,48 +1,56 @@
-name: post
+name: V73.1 Pure Livescore Live Bot
+
 on:
   schedule:
-    - cron: '*/4 * * * *'
+    - cron: "*/2 * * * *"   # Every 2 mins - catches every goal!
   workflow_dispatch:
+
+concurrency:
+  group: livescore-bot
+  cancel-in-progress: false  # Never skip - don't miss goal!
+
 jobs:
-  post:
+  live:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Download old posted.json
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Download previous bot data
         uses: dawidd6/action-download-artifact@v6
         with:
-          name: posted-data
+          name: bot-data
           path: .
           if_no_artifact_found: warn
-        continue-on-error: true
 
-      - uses: actions/cache@v4
-        with:
-          path: /tmp/api_count.json
-          key: api-count-v70
-          restore-keys: api-count-
-          
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          
-      - run: pip install requests
-      
-      - name: Run bot
+      - name: Show previous data
+        run: |
+          echo "--- POSTED ---"
+          ls -lh posted.json last_scores.json || echo "First run - no files yet"
+          wc -l posted.json 2>/dev/null || true
+
+      - name: Run V73.1 Bot
         env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
-          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          API_KEY: ${{ secrets.API_KEY }}
         run: python main.py
 
-      - name: Upload posted.json
+      - name: Save bot data for next run
         uses: actions/upload-artifact@v4
         with:
-          name: posted-data
-          path: posted.json
+          name: bot-data
+          path: |
+            posted.json
+            last_scores.json
           retention-days: 90
+          if-no-files-found: error

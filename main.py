@@ -15,18 +15,21 @@ ALL_LEAGUES={39:"Premier League",140:"La Liga",2:"Champions League",3:"Europa Le
 
 def load_posted():
     try:
-        with open(POSTED_FILE,"r") as f: 
+        with open(POSTED_FILE,"r") as f:
             data=json.load(f)
-            print(f"Loaded posted.json: {len(data)} keys")
+            print(f"Loaded {len(data)} keys from posted.json")
             return set(data)
-    except Exception as e:
-        print(f"No posted.json: {e}")
+    except:
+        print("No posted.json, starting fresh but will create it")
         return set()
 
 def save_posted(p):
+    # Always save at least init key to break first-run loop
+    if len(p)==0:
+        p.add(f"init_{today}")
     try:
         with open(POSTED_FILE,"w") as f: json.dump(list(p)[-2000:], f)
-        print(f"Saved posted.json: {len(p)} keys")
+        print(f"Saved {len(p)} keys")
     except Exception as e: print(f"Save err {e}")
 
 def get_count():
@@ -43,35 +46,24 @@ def save_count(c):
 def fb_post(msg):
     try:
         r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data={"message":msg,"access_token":FB_TOKEN}, timeout=20)
-        print(f"FB {r.status_code}: {msg[:100]}")
+        print(f"FB {r.status_code}: {msg[:120]}")
         return r.status_code==200
     except Exception as e: print(f"FB err {e}"); return False
 
-def is_old_game(fixture_date_str):
-    try:
-        dt_utc=datetime.fromisoformat(fixture_date_str.replace("Z","+00:00"))
-        dt_eat=dt_utc.astimezone(EAT)
-        return (now_eat-dt_eat).total_seconds()/3600>4
-    except: return False
-
 def fetch_fixtures():
     if not FOOTBALL_KEY: return []
-    if get_count()>=85: return []
     try:
-        # Try 1: date=today
         r=requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key":FOOTBALL_KEY}, params={"date":today}, timeout=15)
         save_count(get_count()+1)
         data=r.json().get("response",[])
-        print(f"API date={today} returned {len(data)}")
-        # Try 2: if 0, try live=all
+        print(f"API date={today} -> {len(data)}")
         if len(data)==0:
             r2=requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key":FOOTBALL_KEY}, params={"live":"all"}, timeout=15)
             save_count(get_count()+1)
             data=r2.json().get("response",[])
-            print(f"API live=all returned {len(data)}")
+            print(f"API live=all -> {len(data)}")
         return data
-    except Exception as e:
-        print(f"Fetch err {e}"); return []
+    except Exception as e: print(f"API err {e}"); return []
 
 def fetch_events(fid):
     if get_count()>=90: return []
@@ -98,29 +90,18 @@ def fetch_free_africa():
 
 def main():
     posted=load_posted()
-    is_first=len(posted)==0
-    print(f"=== V67 FIX POSTED {len(posted)} FIRST={is_first} TIME {now_eat} ===")
+    print(f"=== V68 TIME {now_eat} POSTED {len(posted)} ===")
     fixtures=fetch_fixtures()
     free_games=fetch_free_africa()
-    print(f"API {len(fixtures)} + Free {len(free_games)} + count {get_count()}")
+    print(f"API {len(fixtures)} + Free {len(free_games)} count {get_count()}")
     new=False
 
+    # API FOOTBALL - KICKOFF -> HT -> GOALS -> RED -> PEN -> FT
     for fx in fixtures:
         if fx["league"]["id"] not in ALL_LEAGUES: continue
         home=fx["teams"]["home"]["name"]; away=fx["teams"]["away"]["name"]
         hg=fx["goals"]["home"]; ag=fx["goals"]["away"]; status=fx["fixture"]["status"]["short"]
-        fid=fx["fixture"]["id"]; fdate=fx["fixture"]["date"]; league=ALL_LEAGUES[fx["league"]["id"]]; score=f"{hg}-{ag}"
-
-        if is_old_game(fdate):
-            posted.add(f"ft_{fid}_{today}"); posted.add(f"kickoff_{fid}_{today}"); posted.add(f"ht_{fid}_{today}")
-            continue
-
-        if is_first:
-            posted.add(f"ft_{fid}_{today}"); posted.add(f"kickoff_{fid}_{today}"); posted.add(f"ht_{fid}_{today}")
-            # also add event keys to avoid spam
-            for ev in fetch_events(fid):
-                posted.add(f"goal_{fid}_{ev.get('time',{}).get('elapsed','')}_{ev.get('player',{}).get('name','')}_{today}")
-            continue
+        fid=fx["fixture"]["id"]; league=ALL_LEAGUES[fx["league"]["id"]]; score=f"{hg}-{ag}"
 
         if status in ["1H","2H","HT","ET","P","LIVE"]:
             k=f"kickoff_{fid}_{today}"
@@ -130,7 +111,6 @@ def main():
             k=f"ht_{fid}_{today}"
             if k not in posted:
                 if fb_post(f"⏸️ HT: {home} {score} {away}\n\n🏆 {league}"): posted.add(k); new=True
-
         if status in ["1H","2H","HT","ET","P","LIVE","FT","AET","PEN"]:
             for ev in fetch_events(fid):
                 etype=ev.get("type",""); detail=ev.get("detail","") or ""; minute=ev.get("time",{}).get("elapsed",""); player=ev.get("player",{}).get("name","") or "Unknown"
@@ -150,16 +130,22 @@ def main():
                     k=f"red_{fid}_{minute}_{player}_{today}"
                     if k not in posted:
                         if fb_post(f"🔴 RED CARD! {player} ({minute}')\n\n🟢 {home} {score} {away}\n🏆 {league}"): posted.add(k); new=True
-
         if status in ["FT","AET","PEN"]:
             k=f"ft_{fid}_{today}"
             if k not in posted:
                 if fb_post(f"✅ FT: {home} {hg}-{ag} {away}\n\n🏆 {league}"): posted.add(k); new=True
 
-    # Always save, even on first run!
+    # FREE AFRICA LIVE
+    for g in free_games:
+        home=g["home"]; away=g["away"]
+        if not home or not away: continue
+        hg=g["hg"]; ag=g["ag"]; league=g["league"]; score=f"{hg}-{ag}"; fid=f"{home}_{away}"
+        k=f"free_{fid}_{score}_{today}"
+        if k not in posted and hg+ag>0:
+            if fb_post(f"🟢 Live: {home} {score} {away}\n\n🏆 {league}\n\n#AfricanFootball"):
+                posted.add(k); new=True
+
     save_posted(posted)
-    if is_first:
-        print("FIRST RUN - No spam, saved all old games. Next run will post LIVE only!")
-    print("V67 DONE")
+    print(f"V68 DONE posted={len(posted)} new={new}")
 
 if __name__=="__main__": main()

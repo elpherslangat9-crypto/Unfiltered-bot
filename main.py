@@ -23,8 +23,7 @@ def save_posted(p):
 def get_api_count():
  try:
   with open(COUNT_FILE,"r") as f:
-   d=json.load(f)
-   return d["count"] if d["date"]==datetime.now().strftime("%Y-%m-%d") else 0
+   d=json.load(f);return d["count"] if d["date"]==datetime.now().strftime("%Y-%m-%d") else 0
  except:return 0
 def save_api_count(c):
  try:
@@ -36,8 +35,7 @@ def create_image(home,away,league,score_text,home_logo,away_logo,state="LIVE"):
  W,H=1080,1080;bg=Image.new("RGB",(W,H),(10,15,25));draw=ImageDraw.Draw(bg)
  for y in range(H):draw.line([(0,y),(W,y)],fill=(int(10+y*0.08),int(15+y*0.05),int(25+y*0.1)))
  def get_logo(url):
-  try:
-   r=requests.get(url,timeout=10);logo=Image.open(BytesIO(r.content)).convert("RGBA");return logo.resize((340,340),Image.LANCZOS)
+  try:r=requests.get(url,timeout=10);logo=Image.open(BytesIO(r.content)).convert("RGBA");return logo.resize((340,340),Image.LANCZOS)
   except:return Image.new("RGBA",(340,340),(0,0,0,0))
  hl=get_logo(home_logo);al=get_logo(away_logo);bg.paste(hl,(110,280),hl);bg.paste(al,(630,280),al)
  try:fb=ImageFont.truetype("arial.ttf",80)
@@ -69,9 +67,9 @@ FOOTBALL_MUST_HAVE=["football","soccer","premier league","la liga","serie a","bu
 def is_football_news(title):
  t=title.lower()
  for bad in OTHER_SPORTS_BLOCK:
-  if bad in t and not any(f in t for f in ["football","soccer","premier","fifa","uefa","caf"]):print(f"FILTERED OUT (not football): {title}");return False
+  if bad in t and not any(f in t for f in ["football","soccer","premier","fifa","uefa","caf"]):print(f"FILTERED OUT: {title}");return False
  if not any(f in t for f in FOOTBALL_MUST_HAVE):
-  if " vs " not in t and "goal" not in t and "football" not in t:print(f"FILTERED OUT (no football keyword): {title}");return False
+  if " vs " not in t and "goal" not in t and "football" not in t:print(f"FILTERED OUT (no football): {title}");return False
  return True
 def fetch_news_rss():
  items=[]
@@ -90,11 +88,10 @@ def fetch_news_rss():
     if not img:img=f"https://images.unsplash.com/photo-1574629810360-214f3770f775?w=1080&h=1350&fit=crop&q=90&random={random.randint(1,1000)}"
     items.append({"title":title[:150],"image":img,"link":link})
   except Exception as e:print(f"RSS {feed_url} error {e}");continue
- print(f"RSS fetched {len(items)} FOOTBALL ONLY news");return items
+ print(f"RSS fetched {len(items)} FOOTBALL ONLY");return items
 def fetch_real_image(article_url):
  try:
-  r=requests.get(article_url,timeout=10,headers={"User-Agent":"Mozilla/5.0"})
-  m=re.search(r'<meta property="og:image" content="([^"]+)"',r.text)
+  r=requests.get(article_url,timeout=10,headers={"User-Agent":"Mozilla/5.0"});m=re.search(r'<meta property="og:image" content="([^"]+)"',r.text)
   if m:return m.group(1)
   m2=re.search(r'<meta name="twitter:image" content="([^"]+)"',r.text)
   if m2:return m2.group(1)
@@ -129,7 +126,7 @@ def fetch_european_livescore():
    for ev in r.get("events",[]):
     comp=ev["competitions"][0];games.append({"league_id":lid,"home":comp["competitors"][0]["team"]["displayName"],"away":comp["competitors"][1]["team"]["displayName"],"status_state":comp["status"]["type"]["state"],"status_detail":comp["status"]["type"]["detail"],"home_logo":comp["competitors"][0]["team"].get("logo",""),"away_logo":comp["competitors"][1]["team"].get("logo",""),"score":f"{comp['competitors'][0].get('score','0')}-{comp['competitors'][1].get('score','0')}","date":ev.get("date","")[:10],"id":ev.get("id","")})
   except:continue
- print(f"European Livescore {len(games)} games FREE");return games
+ print(f"Euro {len(games)} games");return games
 def fetch_african_api_parallel():
  used=get_api_count()
  if used>=MAX_API:print(f"API {used}/{MAX_API} OVER");return []
@@ -139,15 +136,15 @@ def fetch_african_api_parallel():
    lid=fx["league"]["id"]
    if lid in AFRICAN_IDS or lid in ALL_LEAGUES:
     if lid in AFRICAN_IDS or lid in EUROPEAN_IDS:data.append(fx)
-  print(f"African API {len(data)} fixtures");return data
+  print(f"African {len(data)} fixtures");return data
  except Exception as e:print(f"African API error {e}");return []
 def main():
- posted=load_posted();print(f"=== V61 PERFECT - POSTED {len(posted)} ===")
+ posted=load_posted();print(f"=== V61 FIXED - POSTED {len(posted)} ===")
  with ThreadPoolExecutor(max_workers=2) as ex:
   euro_f=ex.submit(fetch_european_livescore);af_f=ex.submit(fetch_african_api_parallel);euro_games=euro_f.result();african_games=af_f.result()
  today_utc=datetime.utcnow().strftime("%Y-%m-%d");today_local=datetime.now().strftime("%Y-%m-%d")
  euro_games=[g for g in euro_games if g.get("date","")==today_utc or g.get("date","")==today_local or g["status_state"]=="in" or not g.get("date")]
- print(f"Filtered to {len(euro_games)} TODAY/LIVE Euro games")
+ print(f"Filtered {len(euro_games)} TODAY/LIVE")
  for g in euro_games:
   if g["league_id"] not in ALL_LEAGUES:continue
   base_key=f"{g['home']}_{g['away']}_{g.get('date','')}";state=g["status_state"];detail=g["status_detail"];league=ALL_LEAGUES[g["league_id"]]
@@ -173,8 +170,10 @@ def main():
   if status=="NS":
    key=f"af_lineup_{fid}_{today_local}"
    if key not in posted and get_api_count()<MAX_API:
-    try:r=requests.get("https://v3.football.api-sports.io/fixtures/lineups",headers={"x-apisports-key":FOOTBALL_KEY},params={"fixture":fid},timeout=10);save_api_count(get_api_count()+1)
-     if r.json().get("response"):fb_text(f"📋 AFRICAN LINEUP: {home} vs {away}\n🏆 {league}\n\n#AfricanFootball #UnfilteredScores");posted.add(key);save_posted(posted)
+    try:
+     r=requests.get("https://v3.football.api-sports.io/fixtures/lineups",headers={"x-apisports-key":FOOTBALL_KEY},params={"fixture":fid},timeout=10);save_api_count(get_api_count()+1)
+     if r.json().get("response"):
+      fb_text(f"📋 AFRICAN LINEUP: {home} vs {away}\n🏆 {league}\n\n#AfricanFootball #UnfilteredScores");posted.add(key);save_posted(posted)
     except:pass
   elif status in ["1H","2H","ET","LIVE","HT"]:
    key=f"af_live_{fid}_{status}_{fx['goals']['home']}_{fx['goals']['away']}_{today_local}";old_af_key=f"af_live_{fid}_{status}_{today_local}";old_simple=f"af_live_{fid}_{status}"
@@ -191,5 +190,5 @@ def main():
   if news:
    football_news=[n for n in news if is_football_news(n["title"])]
    if football_news:n=random.choice(football_news);img=create_news_image_clear(n["title"],n["image"],n.get("link",""));fb_photo(f"🚨 {n['title']}\n\n#FootballNews #UnfilteredScores",img);posted.add(news_key);save_posted(posted)
- print("V61 DONE")
+ print("V61 FIXED DONE")
 if __name__=="__main__":main()

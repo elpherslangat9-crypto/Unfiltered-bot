@@ -29,17 +29,22 @@ def load_scores():
     except: return {}
 def save_scores(s):
     with open(SCORES_FILE,"w") as f: json.dump(s, f)
+
 def fb_post(msg):
     try:
         r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data={"message":msg,"access_token":FB_TOKEN}, timeout=20)
-        print(f"FB {r.status_code}: {msg}"); return r.status_code==200
-    except: return False
+        print(f"FB POST {r.status_code}: {r.text[:500]}")
+        print(f"MSG: {msg}")
+        return r.status_code==200
+    except Exception as e:
+        print(f"FB FAIL: {e}")
+        return False
+
 def parse_min(s):
     try: return int(''.join(filter(str.isdigit, str(s)))[:2] or 0)
     except: return 0
 
 def get_scorer_fix(home, away):
-    """V75 - FIXED: Search by team ID not name slice"""
     try:
         for lg in LEAGUES.keys():
             try:
@@ -47,44 +52,26 @@ def get_scorer_fix(home, away):
                 r=requests.get(url, timeout=6, headers={"User-Agent":"Mozilla/5.0"})
                 data=r.json()
                 for ev in data.get("events",[]):
-                    # Match by competitors array - 100% accurate
                     comps=ev.get("competitions",[{}])[0].get("competitors",[])
                     if len(comps)<2: continue
                     h=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
                     a=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
-                    # Fuzzy match Barcelona in Barcelona, Alavés in Alavés / Deportivo Alavés
                     if home.lower().split()[0] in h.lower() and away.lower().split()[0] in a.lower():
                         eid=ev.get("id")
                         print(f"FOUND EVENT {h} vs {a} id={eid} league={lg}")
-                        # Get summary
                         surl=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/summary?event={eid}"
                         sr=requests.get(surl, timeout=7, headers={"User-Agent":"Mozilla/5.0"})
                         sj=sr.json()
-                        # Get LAST goal (newest)
                         goals=[]
                         for ke in sj.get("keyEvents",[]):
                             t=ke.get("text","")
-                            if "Goal" in t:
-                                if ke.get("athletesInvolved"):
-                                    nm=ke["athletesInvolved"][0].get("displayName")
-                                    if nm: goals.append(nm)
-                                elif " - " in t:
-                                    # Fallback parse: "Goal! Barcelona 4, Alavés 0. Lewandowski (45'+3')"
-                                    try:
-                                        after=t.split(".")[-1] if "." in t else t.split("-")[-1]
-                                        cand=after.split("(")[0].strip()
-                                        if cand and len(cand)<30 and "Barcelona" not in cand: goals.append(cand)
-                                    except: pass
+                            if "Goal" in t and ke.get("athletesInvolved"):
+                                nm=ke["athletesInvolved"][0].get("displayName")
+                                if nm: goals.append(nm)
                         if goals:
                             last=goals[-1]
                             print(f"SCORER FOUND: {last}")
                             return last
-                        # Try header details
-                        hdr=sj.get("header",{}).get("competitions",[{}])[0]
-                        for d in hdr.get("details",[]):
-                            if d.get("athletesInvolved") and "Goal" in str(d.get("type",{})):
-                                nm=d["athletesInvolved"][0].get("displayName")
-                                if nm: return nm
             except Exception as e:
                 print(f"scorer search fail {lg} {e}")
                 continue
@@ -117,6 +104,7 @@ def get_games():
 def main():
     posted=load_posted(); last_scores=load_scores()
     print(f"=== V75 REAL SCORER FIX {now_eat} ===")
+    print(f"=== POST EVEN IF NO SCORER - FIXED ===")
     games=get_games()
     new_scores={}
     for k,g in games.items():
@@ -126,16 +114,21 @@ def main():
         if prev and (g["hg"]>prev.get("hg",0) or g["ag"]>prev.get("ag",0)):
             gk=f"goal_{k}_{score_str}_{today}"
             if gk not in posted:
+                print(f"NEW GOAL DETECTED: {k} {score_str}")
                 scorer=get_scorer_fix(g["home"], g["away"])
+                
+                # FIXED: POST EVEN IF NO SCORER - NO PROBLEM
                 if scorer:
-                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {scorer} ({g['minute']})"
+                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ Goal: {scorer} ({g['minute']})\n\n#LiveScores #UnfilteredScores"
                 else:
-                    # If still no scorer, wait 60s next run will find it - don't post minute only
-                    print(f"NO SCORER yet for {k}, retry next run")
-                    continue
-                if fb_post(msg): posted.add(gk)
+                    msg=f"🟢 Live: {g['home']} {score_str} {g['away']}\n\n⚽ GOAL! Minute {g['minute']}\n\n#LiveScores #UnfilteredScores"
+                    print(f"NO SCORER yet for {k}, but POSTING ANYWAY - FIXED!")
+                
+                if fb_post(msg): 
+                    posted.add(gk)
+                    print(f"POSTED SUCCESS: {k}")
 
     save_posted(posted); save_scores(new_scores)
-    print(f"V75 DONE")
+    print(f"V75 DONE - FIXED VERSION")
 
 if __name__=="__main__": main()

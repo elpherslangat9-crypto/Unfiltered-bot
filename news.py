@@ -1,6 +1,6 @@
-import os, json, requests, feedparser, re
+import os, json, requests, feedparser, re, time
 from datetime import datetime, timezone, timedelta
-from PIL import Image, ImageEnhance, ImageDraw, ImageFont
+from PIL import Image, ImageEnhance, ImageDraw, ImageFont, ImageFilter
 from io import BytesIO
 
 FB_TOKEN=os.getenv("FB_TOKEN")
@@ -10,13 +10,18 @@ SLIPS_FILE="slips_tracking.json"
 EAT=timezone(timedelta(hours=3))
 now=datetime.now(EAT)
 
+# MANY SOURCES - ALL FOOTBALL FILTERED
 RSS_FEEDS=[
     "https://feeds.bbci.co.uk/sport/football/rss.xml",
     "https://www.skysports.com/rss/12040",
     "https://www.espn.com/espn/rss/soccer/news",
+    "https://www.goal.com/en/feeds/news?fmt=rss",
+    "https://www.football365.com/feed",
+    "https://www.mirror.co.uk/sport/football/?service=rss",
+    "https://talksport.com/national/feed/",
+    "https://www.101greatgoals.com/feed/",
 ]
 
-# FIXED FLAGS - NO HIDDEN UNICODE
 LEAGUE_FLAGS={
     "Man City":"🇬🇧 EPL","Leeds":"🇬🇧 CHAMP","Derby":"🇬🇧 CHAMP","Bristol":"🇬🇧 CHAMP","Coventry":"🇬🇧 CHAMP","Preston":"🇬🇧 CHAMP",
     "Barcelona":"🇪🇸 LaLiga","Getafe":"🇪🇸 LaLiga","Real":"🇪🇸 LaLiga",
@@ -24,7 +29,7 @@ LEAGUE_FLAGS={
     "Bayern":"🇩🇪 Bundesliga","Werder":"🇩🇪 Bundesliga",
     "Galatasaray":"🇹🇷 Super Lig","Antalyaspor":"🇹🇷 Super Lig","Fenerbahce":"🇹🇷 Super Lig",
     "PSG":"🇫🇷 Ligue 1","Nice":"🇫🇷 Ligue 1","Marseille":"🇫🇷 Ligue 1",
-    "Al Hilal":"🇸🇦 Saudi","Al Nassr":"🇸🇦 Saudi","Al Fateh":"🇸🇦 Saudi",
+    "Al Hilal":"🇸🇦 Saudi","Al Nassr":"🇸🇦 Saudi","Al Fateh":"🇸🇦 Saudi","Ronaldo":"🇸🇦 Saudi",
     "Ajax":"🇳🇱 Eredivisie","Feyenoord":"🇳🇱 Eredivisie",
     "Sporting":"🇵🇹 Primeira","Benfica":"🇵🇹 Primeira",
     "Bournemouth":"🇬🇧 EPL","Swansea":"🇬🇧 CHAMP","Hull":"🇬🇧 CHAMP","Blackburn":"🇬🇧 CHAMP","Stoke":"🇬🇧 CHAMP","Sheff":"🇬🇧 CHAMP",
@@ -43,36 +48,39 @@ def save_json(f, data):
     with open(f,"w") as x: json.dump(data, x, indent=2)
 
 def get_image_url(entry):
-    # HD FIRST - THUMBNAIL LAST - FIXED FOR CLEAR QUALITY
-    if hasattr(entry, 'media_content'):
-        try:
-            sorted_content = sorted(entry.media_content, key=lambda x: int(x.get('width',0)), reverse=True)
-            if sorted_content:
-                url = sorted_content[0]['url']
-                # Try to get bigger version if BBC/Sky has _140 etc
-                url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
-                url = re.sub(r'/\d+/cpsprodpb', '/1024/cpsprodpb', url)
-                return url
-        except:
-            return entry.media_content[0]['url']
-    if 'enclosures' in entry and len(entry.enclosures)>0: 
-        return entry.enclosures[0].href
-    # Try to scrape HD og:image from article page
+    # HD FIRST - TRY OG:IMAGE FOR CLEAR LIKE RONALDO PHOTO
     try:
         link = entry.get('link','')
         if link:
             r = requests.get(link, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-            m = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
-            if m:
+            html = r.text
+            # Get biggest image from page
+            m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+            if m and "http" in m.group(1):
                 return m.group(1)
-            m2 = re.search(r'<meta name="twitter:image" content="([^"]+)"', r.text)
-            if m2:
+            m2 = re.search(r'<meta name="twitter:image" content="([^"]+)"', html)
+            if m2 and "http" in m2.group(1):
                 return m2.group(1)
+            # Look for big image in article
+            m3 = re.search(r'<img[^>]+src="([^"]+\.(?:jpg|jpeg|png))"[^>]*>', html)
+            if m3:
+                return m3.group(1)
     except: pass
+
+    if hasattr(entry, 'media_content'):
+        try:
+            sorted_content = sorted(entry.media_content, key=lambda x: int(x.get('width',0) or 0), reverse=True)
+            if sorted_content:
+                url = sorted_content[0]['url']
+                url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
+                return url
+        except:
+            pass
+    if 'enclosures' in entry and len(entry.enclosures)>0: 
+        return entry.enclosures[0].href
     if hasattr(entry,'media_thumbnail'): 
         url = entry.media_thumbnail[0]['url']
-        url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
-        return url
+        return re.sub(r'_\d+\.jpg', '_1024.jpg', url)
     m=re.search(r'<img[^>]+src="([^"]+)"', entry.get('description',''))
     if m: return m.group(1)
     return None
@@ -83,43 +91,52 @@ def make_clear_watermark(img_url):
         if r.status_code!=200: return None
         img=Image.open(BytesIO(r.content)).convert("RGB")
         
-        # === HD FIX: FORCE 1080px MIN ===
+        # === RONALDO CLEAR QUALITY FIX ===
         W,H = img.size
-        # If small image, upscale to 1080 width with LANCZOS (best quality)
-        if W < 1080:
-            new_H = int(H * (1080 / W))
-            img = img.resize((1080, new_H), Image.LANCZOS)
-            W,H = img.size
+        # Super upscale if small
+        if W < 500:
+            img = img.resize((W*4, H*4), Image.LANCZOS)
+        elif W < 800:
+            img = img.resize((W*3, H*3), Image.LANCZOS)
+        elif W < 1080:
+            img = img.resize((1080, int(H * (1080 / W))), Image.LANCZOS)
         
-        # Crop to square 1:1 for Facebook (no stretch blur)
-        if H != W:
-            if H > W:
-                top = (H - W)//2
-                img = img.crop((0, top, W, top+W))
-            else:
-                left = (W - H)//2
-                img = img.crop((left, 0, left+H, H))
-            W,H = img.size
-
-        # Light enhance only - heavy sharpen causes blur look
-        img=ImageEnhance.Sharpness(img).enhance(1.25)
-        img=ImageEnhance.Color(img).enhance(1.08)
-        img=ImageEnhance.Contrast(img).enhance(1.05)
+        # Make clear like Ronaldo photo - UnsharpMask = HD face
+        img = img.filter(ImageFilter.UnsharpMask(radius=2.2, percent=160, threshold=1))
+        img = ImageEnhance.Sharpness(img).enhance(1.25)
+        img = ImageEnhance.Color(img).enhance(1.10)
+        img = ImageEnhance.Contrast(img).enhance(1.08)
         
-        W,H=img.size
+        W,H = img.size
+        # Facebook best = 1080x1350 portrait (like Ronaldo clear photo you sent)
+        target_w, target_h = 1080, 1350
+        # Resize to fill
+        if W < target_w:
+            new_h = int(H * (target_w / W))
+            img = img.resize((target_w, new_h), Image.LANCZOS)
+            W,H = img.size
+        if H < target_h:
+            new_w = int(W * (target_h / H))
+            img = img.resize((new_w, target_h), Image.LANCZOS)
+            W,H = img.size
+        # Center crop
+        left = max(0, (W - target_w)//2)
+        top = max(0, (H - target_h)//2)
+        img = img.crop((left, top, left+target_w, top+target_h))
+        
+        W,H = img.size
         draw=ImageDraw.Draw(img, "RGBA")
         text="Unfiltered Scores"
         try: 
-            font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(W*0.032))
+            font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
         except: font=ImageFont.load_default()
         bbox=draw.textbbox((0,0), text, font=font)
         tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-        x=(W-tw)//2; y=H-th-int(H*0.035)
-        # Professional watermark with black box background
-        draw.rectangle([x-12, y-6, x+tw+12, y+th+6], fill=(0,0,0,200))
-        draw.text((x,y), text, font=font, fill="white", stroke_width=2, stroke_fill="black")
+        x=(W-tw)//2; y=H-th-45
+        draw.rectangle([x-14, y-6, x+tw+14, y+th+8], fill=(0,0,0,210))
+        draw.text((x,y), text, font=font, fill="white")
         path="clear_news.jpg"
-        img.save(path,"JPEG",quality=96, optimize=True, subsampling=0)
+        img.save(path,"JPEG",quality=98, optimize=True, subsampling=0)
         return path
     except Exception as e:
         print(f"Image error: {e}")
@@ -130,9 +147,13 @@ def fb_post_photo(image_path, message):
         url=f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
         with open(image_path,'rb') as f:
             r=requests.post(url, files={'source':f}, data={'message':message,'access_token':FB_TOKEN}, timeout=40)
+        print(f"Photo post status {r.status_code}")
         if r.status_code==200: return r.json().get('id') or r.json().get('post_id')
+        print(r.text)
         return None
-    except: return None
+    except Exception as e:
+        print(f"Photo post error {e}")
+        return None
 
 def fb_post_text(message):
     try:
@@ -223,9 +244,10 @@ def main():
     today=now.strftime("%Y-%m-%d")
     if slips.get("date")!=today: slips={"date":today}
 
+    # Results logic same...
     if "early_posted" in slips and "early_result_posted" not in slips and now.hour>=13:
         orig_id=slips.get("early_post_id")
-        msg=f"🟢 Unfiltered Scores - EARLY RESULTS ✅\nTagging early slip:\n\n╔════════════════════════════╗\n"
+        msg=f"🟢 Unfiltered Scores - EARLY RESULTS ✅\n\n╔════════════════════════════╗\n"
         all_done=True
         for g in slips["early_games"]:
             score,done=get_ft_score(g['home'])
@@ -239,11 +261,10 @@ def main():
             if new_id and orig_id: fb_comment(orig_id, f"Early results ✅ https://facebook.com/{new_id}")
             slips["early_result_posted"]=True
             save_json(SLIPS_FILE, slips)
-            return
 
     if "main_posted" in slips and "main_result_posted" not in slips and now.hour>=23:
         orig_id=slips.get("main_post_id")
-        msg=f"🟢 Unfiltered Scores - MAIN RESULTS 🔥\nTagging main banker (6-7 games):\n\n╔════════════════════════════════╗\n"
+        msg=f"🟢 Unfiltered Scores - MAIN RESULTS 🔥\n\n╔════════════════════════════╗\n"
         all_done=True
         for g in slips["main_games"]:
             score,done=get_ft_score(g['home'])
@@ -257,7 +278,6 @@ def main():
             if new_id and orig_id: fb_comment(orig_id, f"Main results 🔥 https://facebook.com/{new_id}")
             slips["main_result_posted"]=True
             save_json(SLIPS_FILE, slips)
-            return
 
     if 7<=now.hour<8 and 20<=now.minute<=40 and "early_posted" not in slips:
         games=get_today_games_for_slip(True)
@@ -265,7 +285,8 @@ def main():
         pid=fb_post_text(msg)
         if pid:
             slips["early_posted"]=True; slips["early_games"]=games; slips["early_post_id"]=pid
-            save_json(SLIPS_FILE, slips); return
+            save_json(SLIPS_FILE, slips)
+            return
 
     if 10<=now.hour<11 and 20<=now.minute<=40 and "main_posted" not in slips:
         games=get_today_games_for_slip(False)
@@ -273,35 +294,56 @@ def main():
         pid=fb_post_text(msg)
         if pid:
             slips["main_posted"]=True; slips["main_games"]=games; slips["main_post_id"]=pid
-            save_json(SLIPS_FILE, slips); return
+            save_json(SLIPS_FILE, slips)
+            return
 
+    # === POST MANY NEWS WHENEVER THERE IS NEWS ===
     all_news=[]
     for feed_url in RSS_FEEDS:
         try:
             feed=feedparser.parse(feed_url)
-            for e in feed.entries[:8]:
+            for e in feed.entries[:10]:
                 if e.link not in posted_set:
-                    all_news.append(e)
+                    # Football filter - skip non-football
+                    title = (e.get('title','') + ' ' + e.get('description','')).lower()
+                    if any(k in title for k in ['football','soccer','premier','laliga','serie','bundesliga','champions','transfer','goal','epl','uefa','fifa','club','league','cup','match','player','coach']):
+                        all_news.append(e)
         except: pass
 
-    for entry in all_news[:1]:
+    # Remove duplicates by link
+    seen=[]
+    uniq=[]
+    for e in all_news:
+        if e.link not in seen:
+            seen.append(e.link)
+            uniq.append(e)
+    all_news = uniq
+
+    # POST UP TO 3 NEWS PER RUN - NOT EVERY 30 MIN
+    posted_count = 0
+    for entry in all_news[:3]:
         title=entry.get('title','').strip()
-        summary=re.sub('<[^<]+?>','', entry.get('description',''))[:280]
+        summary=re.sub('<[^<]+?>','', entry.get('description',''))[:300]
         img_url=get_image_url(entry)
-        if "breaking" in title.lower():
+        if "breaking" in title.lower() or "official" in title.lower():
             caption=f"🟢 Unfiltered Scores\n\n🚨 {title}\n\n{summary}"
         else:
             caption=f"🟢 Unfiltered Scores\n\n{title}\n\n{summary}"
-        caption+=f"\n\n#UnfilteredScores #FootballNews #AllLeagues #FYP #NonFollowers"
+        caption+=f"\n\n#UnfilteredScores #FootballNews #AllLeagues #FYP"
         pid=None
         if img_url:
             clear_path=make_clear_watermark(img_url)
             if clear_path: pid=fb_post_photo(clear_path, caption)
-        else:
+        if not pid:
             pid=fb_post_text(caption)
         if pid:
             fb_comment(pid, f"Source: {entry.link}")
             posted.append(entry.link)
+            posted_set.add(entry.link)
+            posted_count+=1
+            print(f"Posted: {title[:50]}")
+            time.sleep(8)  # Avoid FB spam block
+        if posted_count>=3:
             break
 
     save_json(POSTED_NEWS, posted[-1000:])

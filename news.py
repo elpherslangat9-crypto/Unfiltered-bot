@@ -43,9 +43,36 @@ def save_json(f, data):
     with open(f,"w") as x: json.dump(data, x, indent=2)
 
 def get_image_url(entry):
-    if hasattr(entry,'media_thumbnail'): return entry.media_thumbnail[0]['url']
-    if hasattr(entry,'media_content'): return entry.media_content[0]['url']
-    if 'enclosures' in entry and len(entry.enclosures)>0: return entry.enclosures[0].href
+    # HD FIRST - THUMBNAIL LAST - FIXED FOR CLEAR QUALITY
+    if hasattr(entry, 'media_content'):
+        try:
+            sorted_content = sorted(entry.media_content, key=lambda x: int(x.get('width',0)), reverse=True)
+            if sorted_content:
+                url = sorted_content[0]['url']
+                # Try to get bigger version if BBC/Sky has _140 etc
+                url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
+                url = re.sub(r'/\d+/cpsprodpb', '/1024/cpsprodpb', url)
+                return url
+        except:
+            return entry.media_content[0]['url']
+    if 'enclosures' in entry and len(entry.enclosures)>0: 
+        return entry.enclosures[0].href
+    # Try to scrape HD og:image from article page
+    try:
+        link = entry.get('link','')
+        if link:
+            r = requests.get(link, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+            m = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+            if m:
+                return m.group(1)
+            m2 = re.search(r'<meta name="twitter:image" content="([^"]+)"', r.text)
+            if m2:
+                return m2.group(1)
+    except: pass
+    if hasattr(entry,'media_thumbnail'): 
+        url = entry.media_thumbnail[0]['url']
+        url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
+        return url
     m=re.search(r'<img[^>]+src="([^"]+)"', entry.get('description',''))
     if m: return m.group(1)
     return None
@@ -55,22 +82,48 @@ def make_clear_watermark(img_url):
         r=requests.get(img_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=20)
         if r.status_code!=200: return None
         img=Image.open(BytesIO(r.content)).convert("RGB")
-        img=ImageEnhance.Sharpness(img).enhance(1.8)
-        img=ImageEnhance.Color(img).enhance(1.15)
-        img=ImageEnhance.Contrast(img).enhance(1.1)
+        
+        # === HD FIX: FORCE 1080px MIN ===
+        W,H = img.size
+        # If small image, upscale to 1080 width with LANCZOS (best quality)
+        if W < 1080:
+            new_H = int(H * (1080 / W))
+            img = img.resize((1080, new_H), Image.LANCZOS)
+            W,H = img.size
+        
+        # Crop to square 1:1 for Facebook (no stretch blur)
+        if H != W:
+            if H > W:
+                top = (H - W)//2
+                img = img.crop((0, top, W, top+W))
+            else:
+                left = (W - H)//2
+                img = img.crop((left, 0, left+H, H))
+            W,H = img.size
+
+        # Light enhance only - heavy sharpen causes blur look
+        img=ImageEnhance.Sharpness(img).enhance(1.25)
+        img=ImageEnhance.Color(img).enhance(1.08)
+        img=ImageEnhance.Contrast(img).enhance(1.05)
+        
         W,H=img.size
-        draw=ImageDraw.Draw(img)
+        draw=ImageDraw.Draw(img, "RGBA")
         text="Unfiltered Scores"
-        try: font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(W*0.045))
+        try: 
+            font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(W*0.032))
         except: font=ImageFont.load_default()
         bbox=draw.textbbox((0,0), text, font=font)
         tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-        x=(W-tw)//2; y=H-th-int(H*0.04)
-        draw.text((x,y), text, font=font, fill="white", stroke_width=3, stroke_fill="black")
+        x=(W-tw)//2; y=H-th-int(H*0.035)
+        # Professional watermark with black box background
+        draw.rectangle([x-12, y-6, x+tw+12, y+th+6], fill=(0,0,0,200))
+        draw.text((x,y), text, font=font, fill="white", stroke_width=2, stroke_fill="black")
         path="clear_news.jpg"
-        img.save(path,"JPEG",quality=95)
+        img.save(path,"JPEG",quality=96, optimize=True, subsampling=0)
         return path
-    except: return None
+    except Exception as e:
+        print(f"Image error: {e}")
+        return None
 
 def fb_post_photo(image_path, message):
     try:
@@ -190,7 +243,7 @@ def main():
 
     if "main_posted" in slips and "main_result_posted" not in slips and now.hour>=23:
         orig_id=slips.get("main_post_id")
-        msg=f"🟢 Unfiltered Scores - MAIN RESULTS 🔥\nTagging main banker (6-7 games):\n\n╔════════════════════════════╗\n"
+        msg=f"🟢 Unfiltered Scores - MAIN RESULTS 🔥\nTagging main banker (6-7 games):\n\n╔════════════════════════════════╗\n"
         all_done=True
         for g in slips["main_games"]:
             score,done=get_ft_score(g['home'])

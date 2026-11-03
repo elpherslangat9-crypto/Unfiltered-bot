@@ -60,7 +60,7 @@ def save_events(e):
 
 def fb_post(msg):
     try:
-        payload={"message":msg,"access_token":FB_TOKEN,"privacy":{"value":"EVERYONE"}}
+        payload={"message":msg,"access_token":FB_TOKEN}
         r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data=payload, timeout=20)
         print(f"FB POST {r.status_code}: {r.text[:600]}")
         return r.status_code==200

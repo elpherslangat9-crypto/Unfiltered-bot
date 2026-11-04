@@ -3,6 +3,10 @@ name: Slips Only - Unfiltered Scores
 permissions:
   contents: write
 
+concurrency:
+  group: news-bot
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '30 4 * * *'    # MORNING SLIP 7:30 EAT
@@ -14,6 +18,7 @@ on:
 jobs:
   news_pred:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:

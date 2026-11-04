@@ -1,241 +1,276 @@
-import os, requests, json, re
+import os, requests, json, re, random
 from datetime import datetime, timedelta, timezone
-FB_TOKEN=os.getenv("FB_TOKEN");FB_PAGE_ID=os.getenv("FB_PAGE_ID") or "1293090263895541"
-POSTED_FILE="posted.json";SCORES_FILE="last_scores.json";EVENTS_FILE="last_events.json"
-EAT=timezone(timedelta(hours=3));now_eat=datetime.now(EAT);today=now_eat.strftime("%Y-%m-%d")
-LEAGUES={"eng.1":"Premier League","esp.1":"LaLiga","ita.1":"Serie A","ger.1":"Bundesliga","fra.1":"Ligue 1","ned.1":"Eredivisie","por.1":"Primeira Liga","tur.1":"Turkish Super Lig","bel.1":"Belgian Pro League","sco.1":"Scottish Premiership","aut.1":"Austrian Bundesliga","sui.1":"Swiss Super League","den.1":"Danish Superliga","sau.1":"Saudi Pro League","uefa.champions":"Champions League","uefa.europa":"Europa League","uefa.europa.conf":"Conference League"}
-TAGS={"Premier League":"#EPL #England #PremierLeague #Arsenal #ManCity #Liverpool #Chelsea #ManUtd #FootballUK","LaLiga":"#LaLiga #Spain #RealMadrid #Barcelona","Serie A":"#SerieA #Italy #Juventus #Inter #ACMilan","Bundesliga":"#Bundesliga #Germany #Bayern #Dortmund","Ligue 1":"#Ligue1 #France #PSG #Paris","Eredivisie":"#Eredivisie #Netherlands #Ajax","Primeira Liga":"#PrimeiraLiga #Portugal #Benfica #Porto","Turkish Super Lig":"#SuperLig #Turkey #Galatasaray #Fenerbahce #Besiktas","Belgian Pro League":"#JupilerProLeague #Belgium","Scottish Premiership":"#SPFL #Scotland #Celtic #Rangers","Saudi Pro League":"#SaudiProLeague #SPL #SaudiArabia #Ronaldo #AlNassr #AlHilal #RoshnSaudiLeague","Champions League":"#UCL #ChampionsLeague #UCLLive","Europa League":"#UEL #EuropaLeague","Conference League":"#UECL #ConferenceLeague"}
-FIX={"man utd":"manchester united","man city":"manchester city","spurs":"tottenham hotspur","athletic club":"athletic bilbao","inter":"inter milan","psg":"paris saint-germain","bayern":"bayern munich","dortmund":"borussia dortmund"}
+
+FB_TOKEN = os.getenv("FB_TOKEN")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID") or "1293090263895541"
+POSTED_FILE="posted.json"
+SCORES_FILE="last_scores.json"
+EVENTS_FILE="last_events.json"
+EAT=timezone(timedelta(hours=3))
+now_eat=datetime.now(EAT)
+today=now_eat.strftime("%Y-%m-%d")
+
+LEAGUES={
+    "eng.1":"Premier League","esp.1":"LaLiga","ita.1":"Serie A","ger.1":"Bundesliga",
+    "fra.1":"Ligue 1","ned.1":"Eredivisie","por.1":"Primeira Liga",
+    "tur.1":"Turkish Super Lig","bel.1":"Belgian Pro League",
+    "sco.1":"Scottish Premiership","aut.1":"Austrian Bundesliga",
+    "sui.1":"Swiss Super League","den.1":"Danish Superliga",
+    "sau.1":"Saudi Pro League",
+    "uefa.champions":"Champions League",
+    "uefa.europa":"Europa League",
+    "uefa.europa.conf":"Conference League"
+}
+COUNTRY_HASHTAGS={
+    "Premier League":"#EPL #England #PremierLeague #Arsenal #ManCity #Liverpool #Chelsea #ManUtd #FootballUK",
+    "LaLiga":"#LaLiga #Spain #RealMadrid #Barcelona",
+    "Serie A":"#SerieA #Italy #Juventus #Inter #ACMilan",
+    "Bundesliga":"#Bundesliga #Germany #Bayern #Dortmund",
+    "Ligue 1":"#Ligue1 #France #PSG #Paris",
+    "Eredivisie":"#Eredivisie #Netherlands #Ajax",
+    "Primeira Liga":"#PrimeiraLiga #Portugal #Benfica #Porto",
+    "Turkish Super Lig":"#SuperLig #Turkey #Galatasaray #Fenerbahce #Besiktas",
+    "Belgian Pro League":"#JupilerProLeague #Belgium",
+    "Scottish Premiership":"#SPFL #Scotland #Celtic #Rangers",
+    "Saudi Pro League":"#SaudiProLeague #SPL #SaudiArabia #Ronaldo #AlNassr #AlHilal #RoshnSaudiLeague",
+    "Champions League":"#UCL #ChampionsLeague #UCLLive",
+    "Europa League":"#UEL #EuropaLeague",
+    "Conference League":"#UECL #ConferenceLeague",
+}
+NAME_FIX={"man utd":"manchester united","man city":"manchester city","spurs":"tottenham hotspur","athletic club":"athletic bilbao","inter":"inter milan","psg":"paris saint-germain","bayern":"bayern munich","dortmund":"borussia dortmund"}
 def norm(n):
- s=re.sub(r'[^a-z0-9 ]','',str(n).lower().strip());s=re.sub(r'\s+',' ',s);return FIX.get(s,s)
-def load(f,d):
- try:
-  with open(f) as x:return json.load(x)
- except:return d
-def save(f,d):
- with open(f,"w") as x:json.dump(d,x)
-def fb(msg):
- try:
-  r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed",data={"message":msg,"access_token":FB_TOKEN},timeout=20);print(f"FB {r.status_code} {r.text[:300]}");return r.status_code==200
- except Exception as e:print(e);return False
-def pmin(s):
- m=re.search(r"(\d+)\s*\+?\s*(\d+)?",str(s))
- if not m:return "0'"
- return f"{m.group(1)}+{m.group(2)}'" if m.group(2) else f"{m.group(1)}'"
-def pint(s):
- m=re.search(r"(\d+)",str(s));return int(m.group(1)) if m else 0
-def hashtags(l):return f"#LiveScores #UnfilteredScores #FootballLive {TAGS.get(l,'#Football')} #FYP #ForYou #Viral #Trending #ExplorePage #NonFollowers #FootballTikTok #SoccerFans #FollowForMore"
-def pick(lst,k):return lst[sum(ord(c) for c in str(k))%len(lst)]
-def goal_c(h,a,hg,ag,ph,pa,ms):
- mi=pint(ms);tot=hg+ag
- if (ph<pa and hg==ag) or (pa<ph and hg==ag):return pick(["😱 WHAT A COMEBACK! From losing to level! This game is MAD!","🔥 COMEBACK IS ON! They refused to give up!"],f"{h}{a}{hg}{ag}")
- if (ph<pa and hg>ag) or (pa<ph and ag>hg):return pick(["🤯 FULL COMEBACK! From losing to WINNING! Unbelievable!","😱 THEY TURNED IT AROUND! From behind to in front!"],f"{h}{a}{hg}{ag}")
- if mi>=88:return pick(["🚨 LATE DRAMA! 90th minute GOAL! Heartbreak or Hero?!","🔥 LAST MINUTE GOAL! The stadium has ERUPTED!"],f"{h}{a}{hg}{ag}")
- if mi<=10:return "⚡ FAST START! Goal in first 10 mins! Buckle up!"
- if tot>=5:return "🎢 GOAL FEST! This game has EVERYTHING!"
- if hg==ag:return "⚖️ Level again! Who wants it more? 👇"
- if abs(hg-ag)>=3:return "😳 This is a ROUT! Total domination!"
- return pick(["🟢 GOAL! The net bulges again!","⚽ GOAL! Another one!","🔥 GOAL! This game keeps delivering!"],f"{h}{a}{hg}{ag}")
-def ht_c(h,a,hg,ag):
- if hg==ag==0:return "😤 0-0 at HT. Who breaks the deadlock? Comment 1 for HOME, 2 for AWAY 👇"
- if hg==ag:return "⚖️ Level at HT! Second half is a FINAL. Who wins? 👇"
- if abs(hg-ag)==1:return "😬 One goal in it at HT! Comeback or hold on? 👇"
- return "😳 Big lead at HT! Is it game over or comeback coming? 👇"
-def ft_c(h,a,hg,ag,ph,pa):
- tot=hg+ag
- if hg==ag and tot>=4:return "🤯 What a game! Goals, drama, everything! Tag a friend who missed this! 👇"
- if hg==ag and tot==0:return "😴 0-0 FT. Boring or tactical masterclass? 👇 YES or NO"
- if hg==ag:return "⚖️ FT: All square! Fair result or did someone bottle it? 👇"
- w=h if hg>ag else a
- if (ph is not None and ph<pa and hg>ag) or (ph is not None and pa<ph and ag>hg):return f"😱 WHAT A COMEBACK! {w} were LOSING and WON IT! Tag someone who gave up early! 👇"
- if abs(hg-ag)>=3:return f"😳 {w} DESTROYED them! {hg}-{ag}! Statement win! 👇"
- if tot>=5:return f"🎢 {hg}-{ag} FT! 7-goal thriller! Best game of the day? 👇"
- return f"✅ FT: {w} takes it {hg}-{ag}! Did your bet win? 👇 Follow for tomorrow's slips 💚"
-# === V87: SOFASCORE PRIMARY + ESPN FALLBACK ===
-HDRS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36","Accept":"application/json","Referer":"https://www.sofascore.com/"}
-def map_league(raw):
- rl=str(raw or "").lower()
- if "champion" in rl:return "Champions League"
- if "europa league" in rl:return "Europa League"
- if "conference" in rl:return "Conference League"
- if "premier league" in rl:return "Premier League"
- if "la liga" in rl or "laliga" in rl:return "LaLiga"
- if "serie a" in rl:return "Serie A"
- if "bundesliga" in rl and "austria" not in rl:return "Bundesliga"
- if "austria" in rl:return "Austrian Bundesliga"
- if "ligue 1" in rl:return "Ligue 1"
- if "eredivisie" in rl:return "Eredivisie"
- if "primeira" in rl:return "Primeira Liga"
- if "super lig" in rl or "süper lig" in rl:return "Turkish Super Lig"
- if "pro league" in rl and "belgium" in rl:return "Belgian Pro League"
- if "premiership" in rl:return "Scottish Premiership"
- if "super league" in rl:return "Swiss Super League"
- if "superliga" in rl:return "Danish Superliga"
- if "saudi" in rl or "pro league" in rl:return "Saudi Pro League"
- return None
-def parse_sofa(ev):
- try:
-  t=ev.get("tournament",{});ln=map_league(t.get("name",""))
-  if not ln:return None
-  h=ev.get("homeTeam",{}).get("name","");a=ev.get("awayTeam",{}).get("name","")
-  if not h or not a:return None
-  hs=ev.get("homeScore",{}) or {};aws=ev.get("awayScore",{}) or {}
-  hg=int(hs.get("current",0) or 0);ag=int(aws.get("current",0) or 0)
-  st_obj=ev.get("status",{}) or {};typ=str(st_obj.get("type","")).lower();desc=str(st_obj.get("description","") or "")
-  if typ=="finished":stt="post";ms="FT"
-  elif typ=="halftime":stt="ht";ms="HT"
-  elif typ=="inprogress":stt="in";ms=pmin(desc) if any(c.isdigit() for c in desc) else "0'"
-  elif typ=="notstarted":stt="pre";ms="0'"
-  else:stt="pre";ms="0'"
-  ko=None
-  try:ko=datetime.fromtimestamp(int(ev.get("startTimestamp",0)),tz=timezone.utc).astimezone(EAT)
-  except:pass
-  lk={v:k for k,v in LEAGUES.items()}.get(ln,"")
-  return {"lk":lk,"ln":ln,"h":h,"a":a,"hg":hg,"ag":ag,"st":stt,"ms":ms,"ko":ko,"d":today.replace('-',''),"nk":f"{norm(h)}_vs_{norm(a)}","eid":str(ev.get("id","")),"sofa_id":str(ev.get("id",""))}
- except:return None
-def sofascore_games():
- out=[];seen=set()
- try:
-  # 1. LIVE games - fastest
-  r=requests.get("https://www.sofascore.com/api/v1/sport/football/events/live",headers=HDRS,timeout=8)
-  print(f"SOFA LIVE {r.status_code} LEN {len(r.text)}")
-  if r.status_code==200:
-   for ev in r.json().get("events",[]):
-    g=parse_sofa(ev)
-    if g and g["nk"] not in seen:seen.add(g["nk"]);out.append(g)
-  # 2. TODAY scheduled - for upcoming + lineups + kickoff
-  for d in [today, (now_eat-timedelta(days=1)).strftime("%Y-%m-%d")]:
-   r2=requests.get(f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{d}",headers=HDRS,timeout=8)
-   print(f"SOFA SCHED {d} {r2.status_code}")
-   if r2.status_code==200:
-    for ev in r2.json().get("events",[]):
-     g=parse_sofa(ev)
-     if g:
-      # If we already have live version, skip - live is fresher
-      if g["nk"] in seen and g["st"]=="pre":continue
-      if g["nk"] not in seen:seen.add(g["nk"]);out.append(g)
- except Exception as e:print(f"SOFA FAIL: {e}")
- print(f"SOFASCORE GAMES: {len(out)}");return out
-def espn_games():
- out=[];seen=set()
- for d in [today.replace('-',''),(now_eat-timedelta(days=1)).strftime("%Y%m%d")]:
-  for lk,ln in LEAGUES.items():
-   try:
-    r=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lk}/scoreboard?dates={d}",timeout=8,headers={"User-Agent":"Mozilla/5.0"})
-    for ev in r.json().get("events",[]):
-     c=ev.get("competitions",[{}])[0].get("competitors",[])
-     if len(c)<2:continue
-     h=c[0]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[1]["team"]["displayName"];a=c[1]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[0]["team"]["displayName"]
-     hg=int(c[0].get("score",0)) if c[0].get("homeAway")=="home" else int(c[1].get("score",0));ag=int(c[1].get("score",0)) if c[0].get("homeAway")=="home" else int(c[0].get("score",0))
-     stt=ev.get("status",{}).get("type",{}).get("state","pre");detail=ev.get("status",{}).get("type",{}).get("detail","");ms=pmin(ev.get("status",{}).get("displayClock",""))
-     if stt=="post":ms="FT"
-     if "Halftime" in detail:stt="ht";ms="HT"
-     nk=f"{norm(h)}_vs_{norm(a)}"
-     if f"{nk}_{d}" in seen:continue
-     seen.add(f"{nk}_{d}")
-     ko=None
-     try:ko=datetime.fromisoformat(ev.get("date","").replace("Z","+00:00")).astimezone(EAT)
-     except:pass
-     out.append({"lk":lk,"ln":ln,"h":h,"a":a,"hg":hg,"ag":ag,"st":stt,"ms":ms,"ko":ko,"d":d,"nk":nk,"eid":str(ev.get("id")),"sofa_id":None})
-   except:continue
- print(f"ESPN GAMES: {len(out)}");return out
-def get_games():
- g=sofascore_games()
- if len(g)>=3:return g # SofaScore worked, use it
- print("SOFA <3 GAMES -> ESPN FALLBACK THIS RUN")
- e=espn_games()
- return e if e else g
-# ESPN only for scorer / lineup / red card - also try SofaScore incidents for scorer
-def sofa_scorer(sid):
- if not sid:return None
- try:
-  r=requests.get(f"https://www.sofascore.com/api/v1/event/{sid}/incidents",headers=HDRS,timeout=6)
-  if r.status_code!=200:return None
-  for inc in reversed(r.json().get("incidents",[])):
-   if inc.get("incidentType")=="goal" and inc.get("player"):return inc["player"].get("name")
- except:pass
- return None
-def sofa_key_events(sid):
- out=[]
- try:
-  r=requests.get(f"https://www.sofascore.com/api/v1/event/{sid}/incidents",headers=HDRS,timeout=6)
-  if r.status_code!=200:return out
-  for inc in r.json().get("incidents",[]):
-   t=inc.get("incidentType","");mi=f"{inc.get('time',0)}'"
-   ath=(inc.get("player") or {}).get("name","")
-   if t=="redCard":out.append({"type":"red","minute":mi,"athlete":ath,"text":"Red Card"})
-   elif t=="penaltyGoal":out.append({"type":"penalty_goal","minute":mi,"athlete":ath,"text":"Penalty Goal"})
-   elif t=="penaltyMissed":out.append({"type":"penalty_miss","minute":mi,"athlete":ath,"text":"Penalty Missed"})
- except:pass
- return out
-_CACHE={}
-def espn_id(lk,nk,d):
- if not lk:return None
- if f"{lk}_{d}" not in _CACHE:
-  try:
-   r=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lk}/scoreboard?dates={d}",timeout=6,headers={"User-Agent":"Mozilla/5.0"});m={}
-   for ev in r.json().get("events",[]):
-    c=ev.get("competitions",[{}])[0].get("competitors",[])
-    if len(c)<2:continue
-    h=c[0]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[1]["team"]["displayName"];a=c[1]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[0]["team"]["displayName"];m[f"{norm(h)}_vs_{norm(a)}"]=str(ev.get("id"))
-   _CACHE[f"{lk}_{d}"]=m
-  except:_CACHE[f"{lk}_{d}"]={}
- return _CACHE[f"{lk}_{d}"].get(nk)
-def espn_sum(lk,eid):
- try:
-  r=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lk}/summary?event={eid}",timeout=6,headers={"User-Agent":"Mozilla/5.0"});return r.json()
- except:return {}
-def espn_scorer(lk,eid):
- if not eid:return None
- for ke in reversed(espn_sum(lk,eid).get("keyEvents",[])):
-  if "Goal" in ke.get("text","") and ke.get("athletesInvolved"):return ke["athletesInvolved"][0].get("displayName")
- return None
-def espn_key_events(lk,eid):
- out=[]
- for ke in espn_sum(lk,eid).get("keyEvents",[]):
-  t=ke.get("text","");ath=ke["athletesInvolved"][0].get("displayName","") if ke.get("athletesInvolved") else "";mi=ke.get("clock",{}).get("displayValue","")
-  typ="red" if "Red Card" in t else "penalty_miss" if "Penalty" in t and "Goal" not in t else "penalty_goal" if "Penalty" in t else "var" if "VAR" in t else None
-  if typ:out.append({"type":typ,"text":t,"minute":mi,"athlete":ath})
- return out
-def lineups(lk,eid):
- txt=[]
- for tm in espn_sum(lk,eid).get("lineups",[])[:2]:
-  st=[p.get("athlete",{}).get("displayName","") for p in tm.get("roster",[]) if p.get("starter") is not False and p.get("position")!="Bench" and p.get("athlete",{}).get("displayName")]
-  if len(st)>=7:txt.append(f"🔵 {tm.get('team',{}).get('displayName','Team')}: {', '.join(st[:7])}...")
- return "\n".join(txt) if txt else None
+    s=re.sub(r'[^a-z0-9 ]','',str(n).lower().strip());s=re.sub(r'\s+',' ',s);return NAME_FIX.get(s,s)
+def load_posted():
+    try:
+        with open(POSTED_FILE,"r") as f: return set(json.load(f))
+    except: return set()
+def save_posted(p):
+    with open(POSTED_FILE,"w") as f: json.dump(list(p)[-5000:], f)
+def load_scores():
+    try:
+        with open(SCORES_FILE,"r") as f: return json.load(f)
+    except: return {}
+def save_scores(s):
+    with open(SCORES_FILE,"w") as f: json.dump(s, f)
+def load_events():
+    try:
+        with open(EVENTS_FILE,"r") as f: return json.load(f)
+    except: return {}
+def save_events(e):
+    yday=(now_eat-timedelta(days=1)).strftime("%Y-%m-%d")
+    clean={k:v for k,v in e.items() if today in k or yday in k}
+    with open(EVENTS_FILE,"w") as f: json.dump(clean, f)
+def fb_post(msg):
+    for attempt in range(2):
+        try:
+            payload={"message":msg,"access_token":FB_TOKEN}
+            r=requests.post(f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed", data=payload, timeout=20)
+            print(f"FB POST {r.status_code}: {r.text[:600]}")
+            if r.status_code==200: return True
+        except Exception as e:
+            print(f"FB FAIL attempt {attempt}: {e}")
+    return False
+def parse_min(s):
+    try:
+        s=str(s).strip()
+        if not s: return "0'"
+        if "HT" in s.upper() or "Half" in s: return "HT"
+        m=re.search(r"(\d+)\s*\+?\s*(\d+)?", s)
+        if not m: return "0'"
+        if m.group(2): return f"{m.group(1)}+{m.group(2)}'"
+        return f"{m.group(1)}'"
+    except: return "0'"
+def parse_min_int(s):
+    try:
+        m=re.search(r"(\d+)",str(s));return int(m.group(1)) if m else 0
+    except: return 0
+def get_hashtags(league_name):
+    base="#LiveScores #UnfilteredScores #FootballLive"
+    extra=COUNTRY_HASHTAGS.get(league_name, "#Football")
+    return f"{base} {extra} #FYP #ForYou #Viral #Trending #ExplorePage #NonFollowers #FootballTikTok #SoccerFans #FollowForMore"
+def pick(lst, key):
+    h=sum(ord(c) for c in str(key))%len(lst);return lst[h]
+def goal_comment(home,away,hg,ag,prev_hg,prev_ag,minute_str):
+    mi=parse_min_int(minute_str)
+    total=hg+ag
+    was_losing_home=prev_hg<prev_ag; was_losing_away=prev_ag<prev_hg
+    now_level=hg==ag; now_home_win=hg>ag; now_away_win=ag>hg
+    if (was_losing_home and now_level) or (was_losing_away and now_level):
+        return pick(["😱 WHAT A COMEBACK! From losing to level! This game is MAD!","🔥 COMEBACK IS ON! They refused to give up!","WHAT A GAME! Comeback complete - level again!"], f"{home}{away}{hg}{ag}")
+    if (was_losing_home and now_home_win) or (was_losing_away and now_away_win):
+        return pick(["🤯 FULL COMEBACK! From losing to WINNING! Unbelievable!","😱 THEY TURNED IT AROUND! From behind to in front!","WHAT A COMEBACK! This is why we love football!"], f"{home}{away}{hg}{ag}")
+    if mi>=88:
+        return pick(["🚨 LATE DRAMA! 90th minute GOAL! Heartbreak or Hero?!","⏰ 90' WINNER?! This league never sleeps!","🔥 LAST MINUTE GOAL! The stadium has ERUPTED!"], f"{home}{away}{hg}{ag}")
+    if mi<=10:
+        return pick(["⚡ FAST START! Goal in first 10 mins! Buckle up!","🚀 EARLY GOAL! We are in for a banger!"], f"{home}{away}{hg}{ag}")
+    if total>=5:
+        return pick(["🎢 GOAL FEST! This game has EVERYTHING!","🔥 GOALS GALORE! Defenders, go home!"], f"{home}{away}{hg}{ag}")
+    if hg==ag:
+        return pick(["⚖️ Level again! Who wants it more? 👇","Game on again! Level! Who scores next?"], f"{home}{away}{hg}{ag}")
+    if abs(hg-ag)>=3:
+        return pick(["😳 This is a ROUT! Total domination!","🔥 They are running riot! No mercy!"], f"{home}{away}{hg}{ag}")
+    return pick(["🟢 GOAL! The net bulges again!","⚽ GOAL! Another one!","🔥 GOAL! This game keeps delivering!"], f"{home}{away}{hg}{ag}")
+def ht_comment(home,away,hg,ag):
+    if hg==0 and ag==0: return pick(["😤 0-0 at HT. Tight, tense... who breaks the deadlock? Comment 1 for HOME, 2 for AWAY 👇","⏸️ Goalless at HT. Second half will EXPLODE. Who wins? 👇"], f"{home}{away}ht")
+    if hg==ag: return pick(["⚖️ Level at HT! Second half is a FINAL. Who wins? 👇","🔥 All square at HT! This is going down to the wire!"], f"{home}{away}ht")
+    if abs(hg-ag)==1: return pick(["😬 One goal in it at HT! Comeback or hold on? 👇","⏸️ HT: One goal separates them. Second half = DRAMA!"], f"{home}{away}ht")
+    return pick(["😳 Big lead at HT! Is it game over or is a comeback coming? 👇","🔥 HT: Dominant! Can they hold it?"], f"{home}{away}ht")
+def ft_comment(home,away,hg,ag,prev_hg,prev_ag):
+    total=hg+ag
+    was_losing_home=prev_hg is not None and prev_hg<prev_ag
+    was_losing_away=prev_hg is not None and prev_ag<prev_hg
+    if hg==ag and total>=4: return "🤯 What a game! Goals, drama, everything! Tag a friend who missed this! 👇"
+    if hg==ag and total==0: return "😴 0-0 FT. Defenders win today. Was it boring or tactical masterclass? 👇 YES or NO"
+    if hg==ag: return "⚖️ FT: All square! Fair result or did someone bottle it? 👇"
+    winner=home if hg>ag else away
+    if (was_losing_home and hg>ag) or (was_losing_away and ag>hg): return f"😱 WHAT A COMEBACK! {winner} were LOSING and WON IT! This is FOOTBALL! Tag someone who gave up early! 👇"
+    if abs(hg-ag)>=3: return f"😳 {winner} DESTROYED them! {hg}-{ag}! Statement win! 👇"
+    if total>=5: return f"🎢 {hg}-{ag} FT! 7-goal thriller! Best game of the day? 👇"
+    return f"✅ FT: {winner} takes it {hg}-{ag}! Did your bet win? 👇 Follow for tomorrow's slips 💚"
+# === V90 ESPN ONLY - NEVER BLOCKED, NEVER SLEEPS ===
+def espn_get(url):
+    for attempt in range(2):
+        try:
+            r=requests.get(url, timeout=10, headers={"User-Agent":"Mozilla/5.0"})
+            if r.status_code==200: return r.json()
+        except: pass
+    return {}
+def get_espn_games():
+    all_games=[];seen=set()
+    dates_to_check=[today.replace('-',''), (now_eat - timedelta(days=1)).strftime("%Y%m%d"), (now_eat + timedelta(days=1)).strftime("%Y%m%d")]
+    for date_str_param in dates_to_check:
+        for lg_key, lg_name in LEAGUES.items():
+            url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg_key}/scoreboard?dates={date_str_param}"
+            data=espn_get(url)
+            for ev in data.get("events",[]):
+                eid=str(ev.get("id"))
+                if eid in seen: continue
+                seen.add(eid)
+                status=ev.get("status",{}).get("type",{}).get("state");detail=ev.get("status",{}).get("type",{}).get("detail","");date_str=ev.get("date","")
+                # FIX: ESPN says state=in during Halftime, fix it
+                if "Halftime" in detail: status="ht"
+                comps=ev.get("competitions",[{}])[0].get("competitors",[])
+                if len(comps)<2: continue
+                home=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
+                away=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
+                hg=int(comps[0].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[1].get("score",0))
+                ag=int(comps[1].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[0].get("score",0))
+                clock=ev.get("status",{}).get("displayClock","")
+                try:kickoff_eat=datetime.fromisoformat(date_str.replace("Z","+00:00")).astimezone(EAT)
+                except:kickoff_eat=None
+                all_games.append({"league_key":lg_key,"league_name":lg_name,"id":eid,"home":home,"away":away,"hg":hg,"ag":ag,"state":status,"detail":detail,"clock":clock,"minute_str":parse_min(clock) if status!="ht" else "HT","kickoff_eat":kickoff_eat,"date_param":date_str_param,"norm_key":f"{norm(home)}_vs_{norm(away)}"})
+    print(f"ESPN: {len(all_games)} games")
+    return all_games
+def get_espn_summary(league_key, event_id):
+    url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_key}/summary?event={event_id}"
+    return espn_get(url)
+def get_espn_key_events(league_key, event_id):
+    sj=get_espn_summary(league_key, event_id);events=[]
+    for ke in sj.get("keyEvents",[]):
+        text=ke.get("text","");minute=ke.get("clock",{}).get("displayValue","");athlete=ke["athletesInvolved"][0].get("displayName","") if ke.get("athletesInvolved") else ""
+        if "Red Card" in text: typ="red"
+        elif "Penalty" in text and "Goal" not in text: typ="penalty_miss"
+        elif "Penalty" in text and "Goal" in text: typ="penalty_goal"
+        elif "VAR" in text: typ="var"
+        elif "Goal" in text: typ="goal"
+        else: continue
+        events.append({"type":typ,"text":text,"minute":minute,"athlete":athlete})
+    return events
+def get_scorer(league_key, event_id):
+    sj=get_espn_summary(league_key, event_id)
+    for ke in reversed(sj.get("keyEvents",[])):
+        if "Goal" in ke.get("text","") and ke.get("athletesInvolved"): return ke["athletesInvolved"][0].get("displayName")
+    return None
+def get_lineups(league_key, event_id):
+    sj=get_espn_summary(league_key, event_id);lineups=sj.get("lineups",[])
+    if not lineups: return None
+    txt=[]
+    for team in lineups[:2]:
+        tname=team.get("team",{}).get("displayName","Team");starters=[]
+        for p in team.get("roster",[]):
+            if p.get("starter") is False: continue
+            if p.get("position","")=="Bench": continue
+            nm=p.get("athlete",{}).get("displayName","")
+            if nm: starters.append(nm)
+        starters=starters[:11]
+        if len(starters)>=7: txt.append(f"🔵 {tname}: {', '.join(starters[:7])}...")
+    return "\n".join(txt) if txt else None
 def main():
- posted=set(load(POSTED_FILE,[]));last=load(SCORES_FILE,{});lev=load(EVENTS_FILE,{});print(f"=== V87 SOFASCORE PRIMARY {now_eat} ===")
- new={};nev={}
- for g in get_games():
-  h,a,hg,ag,st,ln,lk,ms,ko,d,nk,eid,sid=g["h"],g["a"],g["hg"],g["ag"],g["st"],g["ln"],g["lk"],g["ms"],g["ko"],g["d"],g["nk"],g["eid"],g.get("sofa_id")
-  key=f"sofa_{nk}_{d}";ss=f"{hg}-{ag}";new[key]={"score":ss,"hg":hg,"ag":ag,"state":st};ht=hashtags(ln);prev=last.get(key);ph=prev.get("hg",0) if prev else 0;pa=prev.get("ag",0) if prev else 0;ps=prev.get("state") if prev else None;fol="\n\nFollow @Unfiltered Scores 🔔 Turn ON notifications - You will miss BOOM if you don't!"
-  if lk in ["eng.1","uefa.champions"] and st=="pre" and ko:
-   mk=(ko-now_eat).total_seconds()/60
-   if 0<=mk<=90 and f"lineup_{key}" not in posted:
-    eid2=espn_id(lk,nk,d);lp=lineups(lk,eid2) if eid2 else None
-    if lp and fb(f"📋 LINEUPS OUT! - {int(mk)} MINS TO KICK OFF!\n\n🔥 {h} vs {a}\n🏆 {ln}\n⏰ {ko.strftime('%H:%M')} EAT\n\n{lp}\n\nWho wins? Comment 1 for {h}, 2 for {a} 👇\n\n{ht}{fol}"):posted.add(f"lineup_{key}")
-  if st=="in" and ps=="pre" and f"kickoff_{key}" not in posted:
-   if fb(f"⏰ KICK OFF!\n\n🔥 {h} vs {a}\n🏆 {ln}\n\n{pick(['KICK OFF! We are LIVE! Who scores first? 👇','⏰ KICK OFF! Buckle up, this one will be spicy!','KICK OFF! Drop your score prediction 👇'],key)}\n\n{ht}{fol}"):posted.add(f"kickoff_{key}")
-  if prev and (hg>ph or ag>pa) and f"goal_{key}_{ss}" not in posted:
-   sc=sofa_scorer(sid) or (espn_scorer(lk,espn_id(lk,nk,d)) if lk else None);sm=goal_c(h,a,hg,ag,ph,pa,ms)
-   txt=f"🟢 GOAL {ms}!\n\n🔥 {h} {ss} {a}\n⚽ {sc} ({ms})\n🏆 {ln}\n\n{sm}\n\n{pick(['Who scores next? 👇','Was it a foul? YES or NO 👇','Tag a friend who needs to see this goal! 👇'],key)}\n\n{ht}{fol}" if sc else f"🟢 GOAL {ms}!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{sm}\n\n{pick(['Who scores next? 👇','Was it a foul? YES or NO 👇','Tag a friend who needs to see this goal! 👇'],key)}\n\n{ht}{fol}"
-   if fb(txt):posted.add(f"goal_{key}_{ss}")
-  if st in ["in","ht"]:
-   evs=sofa_key_events(sid)
-   if not evs and lk:
-    evs=espn_key_events(lk,espn_id(lk,nk,d))
-   for ev in evs:
-    ek=f"{ev['type']}_{key}_{ev['minute']}_{ev['athlete']}"
-    if ek in lev or ek in posted:continue
-    m=None
-    if ev["type"]=="red":m=f"🔴 RED CARD {ev['minute']}!\n\n🔥 {h} {ss} {a}\n👤 {ev['athlete']} sent off!\n🏆 {ln}\n\nGame changed? Can they hold on with 10 men? 👇\n\n{ht}{fol}"
-    elif ev["type"]=="penalty_goal":m=f"⚽ PENALTY GOAL {ev['minute']}!\n\n🔥 {h} {ss} {a}\n👤 {ev['athlete']} scores from spot!\n🏆 {ln}\n\nCold from 12 yards! 🥶 👇\n\n{ht}{fol}"
-    elif ev["type"]=="penalty_miss":m=f"❌ PENALTY MISSED {ev['minute']}!\n\n🔥 {h} {ss} {a}\n👤 {ev['athlete']} misses!\n🏆 {ln}\n\nHUGE MISS! Will it cost them? 👇\n\n{ht}{fol}"
-    elif ev["type"]=="var":m=f"📺 VAR CHECK {ev['minute']}!\n\n🔥 {h} {ss} {a}\n{ev['text']}\n🏆 {ln}\n\nVAR... Love it or hate it? 👇\n\n{ht}{fol}"
-    if m and fb(m):posted.add(ek);nev[ek]=True
-  if st=="ht" and ps in ["in",None] and f"ht_{key}_{ss}" not in posted:
-   if fb(f"⏸️ HALF TIME!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{ht_c(h,a,hg,ag)}\n\n{ht}{fol}"):posted.add(f"ht_{key}_{ss}")
-  if st=="post" and ps in ["in","ht","pre",None] and f"ft_{key}_{ss}" not in posted:
-   if fb(f"✅ FULL TIME!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{ft_c(h,a,hg,ag,ph if prev else None,pa if prev else None)}\n\n{ht}{fol}"):posted.add(f"ft_{key}_{ss}")
- save(POSTED_FILE,list(posted)[-5000:]);save(SCORES_FILE,new);save(EVENTS_FILE,{**lev,**nev});print(f"V87 DONE - {len(posted)} posted")
-if __name__=="__main__":main()
+    posted=load_posted(); last_scores=load_scores(); last_events=load_events()
+    print(f"=== V90 ESPN ONLY - NEVER SLEEPS {now_eat} ===")
+    espn_games=get_espn_games()
+    # NEVER WIPE: If ESPN fails this run, abort without saving
+    if len(espn_games)==0:
+        print("ESPN 0 - ABORT, DO NOT WIPE SCORES")
+        return
+    new_scores={}; new_events={}
+    for g in espn_games:
+        eid=g["id"];key=f"espn_{eid}";home=g["home"];away=g["away"];hg=g["hg"];ag=g["ag"];state=g["state"];league_name=g["league_name"];league_key=g["league_key"];event_id=eid;kickoff_eat=g["kickoff_eat"];match_date=g["date_param"]
+        minute_str=g["minute_str"];score_str=f"{hg}-{ag}";new_scores[key]={"score":score_str,"hg":hg,"ag":ag,"state":state};hashtags=get_hashtags(league_name);prev=last_scores.get(key);prev_hg=prev.get("hg",0) if prev else 0;prev_ag=prev.get("ag",0) if prev else 0;prev_state=prev.get("state") if prev else None
+        follow="\n\nFollow @Unfiltered Scores 🔔 Turn ON notifications - You will miss BOOM if you don't!"
+        # === LINEUPS EPL + UCL ===
+        if league_key in ["eng.1","uefa.champions"] and state=="pre" and kickoff_eat:
+            minutes_to_kick=(kickoff_eat - now_eat).total_seconds()/60
+            if 0 <= minutes_to_kick <= 90:
+                gk_lineup=f"lineup_{key}_{match_date}"
+                if gk_lineup not in posted:
+                    lineup=get_lineups(league_key, event_id)
+                    if lineup:
+                        msg=f"📋 LINEUPS OUT! - {int(minutes_to_kick)} MINS TO KICK OFF!\n\n🔥 {home} vs {away}\n🏆 {league_name}\n⏰ {kickoff_eat.strftime('%H:%M')} EAT\n\n{lineup}\n\nWho wins? Comment 1 for {home}, 2 for {away} 👇\n\n{hashtags}{follow}"
+                        if fb_post(msg): posted.add(gk_lineup)
+                    else: print(f"Lineup not yet available {home} vs {away} - {int(minutes_to_kick)} mins to go, will retry")
+        # === KICKOFF - FIXED: Use state change, not minute 0' ===
+        if state=="in" and prev_state=="pre":
+            gk=f"kickoff_{key}_{match_date}"
+            if gk not in posted:
+                ko_pick=pick(["KICK OFF! We are LIVE! Who scores first? 👇","⏰ KICK OFF! Buckle up, this one will be spicy!","KICK OFF! Drop your score prediction 👇"], key)
+                msg=f"⏰ KICK OFF!\n\n🔥 {home} vs {away}\n🏆 {league_name}\n\n{ko_pick}\n\n{hashtags}{follow}"
+                if fb_post(msg): posted.add(gk)
+        # === GOAL - Normal + CATCH-UP if bot slept ===
+        goal_to_post=False;catchup=False
+        if prev and (hg>prev.get("hg",0) or ag>prev.get("ag",0)):
+            goal_to_post=True
+        elif not prev and (hg+ag)>0 and state in ["in","ht","post"]:
+            # Bot first saw game already 2-0 - don't miss it, post catch-up
+            goal_to_post=True;catchup=True;prev_hg=0;prev_ag=0
+        if goal_to_post:
+            gk=f"goal_{key}_{score_str}_{match_date}"
+            if gk not in posted:
+                scorer=get_scorer(league_key, event_id)
+                smart=goal_comment(home,away,hg,ag,prev_hg,prev_ag,minute_str)
+                cta=pick(["Who scores next? 👇","Was it a foul? YES or NO 👇","Tag a friend who needs to see this goal! 👇"], gk)
+                prefix="🟢 GOAL" if not catchup else "🟢 GOAL - CATCH UP!"
+                if scorer: msg=f"{prefix} {minute_str}!\n\n🔥 {home} {score_str} {away}\n⚽ {scorer} ({minute_str})\n🏆 {league_name}\n\n{smart}\n\n{cta}\n\n{hashtags}{follow}"
+                else: msg=f"{prefix} {minute_str}!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{cta}\n\n{hashtags}{follow}"
+                if fb_post(msg): posted.add(gk)
+        # === RED / PENALTY / VAR - Also check at FT if missed during live ===
+        if state in ["in","ht","post"] and event_id and league_key:
+            events=get_espn_key_events(league_key, event_id)
+            for ev in events:
+                if ev["type"] in ["goal","yellow"]: continue
+                ev_key=f"{ev['type']}_{key}_{ev['minute']}_{ev['athlete']}_{match_date}"
+                if ev_key in last_events or ev_key in posted: continue
+                msg=None
+                if ev["type"]=="red": msg=f"🔴 RED CARD {ev['minute']}!\n\n🔥 {home} {score_str} {away}\n👤 {ev['athlete']} sent off!\n🏆 {league_name}\n\nGame changed? Can they hold on with 10 men? 👇\n\n{hashtags}{follow}"
+                elif ev["type"]=="penalty_goal": msg=f"⚽ PENALTY GOAL {ev['minute']}!\n\n🔥 {home} {score_str} {away}\n👤 {ev['athlete']} scores from spot!\n🏆 {league_name}\n\nCold from 12 yards! 🥶 👇\n\n{hashtags}{follow}"
+                elif ev["type"]=="penalty_miss": msg=f"❌ PENALTY MISSED {ev['minute']}!\n\n🔥 {home} {score_str} {away}\n👤 {ev['athlete']} misses!\n🏆 {league_name}\n\nHUGE MISS! Will it cost them? 👇\n\n{hashtags}{follow}"
+                elif ev["type"]=="var": msg=f"📺 VAR CHECK {ev['minute']}!\n\n🔥 {home} {score_str} {away}\n{ev['text']}\n🏆 {league_name}\n\nVAR... Love it or hate it? 👇\n\n{hashtags}{follow}"
+                if msg:
+                    if fb_post(msg): posted.add(ev_key);new_events[ev_key]=True
+        # === HT - FIXED: posts even if first seen at HT ===
+        if state=="ht":
+            gk=f"ht_{key}_{score_str}_{match_date}"
+            if gk not in posted:
+                smart=ht_comment(home,away,hg,ag)
+                msg=f"⏸️ HALF TIME!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{hashtags}{follow}"
+                if fb_post(msg): posted.add(gk)
+        # === FT - FIXED: posts even if first seen at FT, no 4h block ===
+        if state=="post":
+            gk=f"ft_{key}_{score_str}_{match_date}"
+            if gk not in posted:
+                smart=ft_comment(home,away,hg,ag,prev_hg if prev else None,prev_ag if prev else None)
+                msg=f"✅ FULL TIME!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{hashtags}{follow}"
+                if fb_post(msg): posted.add(gk)
+    save_posted(posted); save_scores(new_scores); save_events({**last_events, **new_events})
+    print(f"V90 DONE - {len(posted)} posted, ESPN ONLY, never sleeps")
+if __name__=="__main__": main()

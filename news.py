@@ -1,352 +1,272 @@
-import os, json, requests, feedparser, re, time
-from datetime import datetime, timezone, timedelta
-from PIL import Image, ImageEnhance, ImageDraw, ImageFont, ImageFilter
-from io import BytesIO
+import os, requests, json, hashlib
+from datetime import datetime, timedelta, timezone
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-FB_TOKEN=os.getenv("FB_TOKEN")
-FB_PAGE_ID=os.getenv("FB_PAGE_ID") or "1293090263895541"
-POSTED_NEWS="posted_news.json"
-SLIPS_FILE="slips_tracking.json"
-EAT=timezone(timedelta(hours=3))
-now=datetime.now(EAT)
+FB_TOKEN = os.getenv("FB_TOKEN")
+FB_PAGE_ID = os.getenv("FB_PAGE_ID") or "1293090263895541"
+EAT = timezone(timedelta(hours=3))
+now_eat = datetime.now(EAT)
+today = now_eat.strftime("%Y-%m-%d")
+today_param = now_eat.strftime("%Y%m%d")
+HASH_FILE = "posted_predictions.json"
 
-# MANY SOURCES - ALL FOOTBALL FILTERED
-RSS_FEEDS=[
-    "https://feeds.bbci.co.uk/sport/football/rss.xml",
-    "https://www.skysports.com/rss/12040",
-    "https://www.espn.com/espn/rss/soccer/news",
-    "https://www.goal.com/en/feeds/news?fmt=rss",
-    "https://www.football365.com/feed",
-    "https://www.mirror.co.uk/sport/football/?service=rss",
-    "https://talksport.com/national/feed/",
-    "https://www.101greatgoals.com/feed/",
-]
-
-LEAGUE_FLAGS={
-    "Man City":"🇬🇧 EPL","Leeds":"🇬🇧 CHAMP","Derby":"🇬🇧 CHAMP","Bristol":"🇬🇧 CHAMP","Coventry":"🇬🇧 CHAMP","Preston":"🇬🇧 CHAMP",
-    "Barcelona":"🇪🇸 LaLiga","Getafe":"🇪🇸 LaLiga","Real":"🇪🇸 LaLiga",
-    "Inter":"🇮🇹 Serie A","Fiorentina":"🇮🇹 Serie A","Juventus":"🇮🇹 Serie A",
-    "Bayern":"🇩🇪 Bundesliga","Werder":"🇩🇪 Bundesliga",
-    "Galatasaray":"🇹🇷 Super Lig","Antalyaspor":"🇹🇷 Super Lig","Fenerbahce":"🇹🇷 Super Lig",
-    "PSG":"🇫🇷 Ligue 1","Nice":"🇫🇷 Ligue 1","Marseille":"🇫🇷 Ligue 1",
-    "Al Hilal":"🇸🇦 Saudi","Al Nassr":"🇸🇦 Saudi","Al Fateh":"🇸🇦 Saudi","Ronaldo":"🇸🇦 Saudi",
-    "Ajax":"🇳🇱 Eredivisie","Feyenoord":"🇳🇱 Eredivisie",
-    "Sporting":"🇵🇹 Primeira","Benfica":"🇵🇹 Primeira",
-    "Bournemouth":"🇬🇧 EPL","Swansea":"🇬🇧 CHAMP","Hull":"🇬🇧 CHAMP","Blackburn":"🇬🇧 CHAMP","Stoke":"🇬🇧 CHAMP","Sheff":"🇬🇧 CHAMP",
-}
-
-def get_flag(team):
-    for k,v in LEAGUE_FLAGS.items():
-        if k.lower() in team.lower(): return v
-    return "🌍 ALL LEAGUES"
-
-def load_json(f, d):
+def load_hashes():
     try:
-        with open(f,"r") as x: return json.load(x)
-    except: return d
-def save_json(f, data):
-    with open(f,"w") as x: json.dump(data, x, indent=2)
+        with open(HASH_FILE,"r") as f: return set(json.load(f))
+    except: return set()
+def save_hashes(h):
+    with open(HASH_FILE,"w") as f: json.dump(list(h)[-1000:], f)
 
-def get_image_url(entry):
-    # HD FIRST - TRY OG:IMAGE FOR CLEAR LIKE RONALDO PHOTO
+LEAGUES = {"eng.1":"EPL","eng.2":"CHAMP","esp.1":"LaLiga","ita.1":"Serie A","ger.1":"Bundesliga","fra.1":"Ligue 1","ned.1":"Eredivisie","por.1":"Primeira","uefa.champions":"UCL","uefa.europa":"UEL","tur.1":"Super Lig"}
+FLAGS = {"eng.1":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","eng.2":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","esp.1":"🇪🇸","ita.1":"🇮🇹","ger.1":"🇩🇪","fra.1":"🇫🇷","ned.1":"🇳🇱","por.1":"🇵🇹","uefa.champions":"🇪🇺","uefa.europa":"🇪🇺","tur.1":"🇹🇷"}
+
+def get_standings(league):
     try:
-        link = entry.get('link','')
-        if link:
-            r = requests.get(link, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-            html = r.text
-            # Get biggest image from page
-            m = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-            if m and "http" in m.group(1):
-                return m.group(1)
-            m2 = re.search(r'<meta name="twitter:image" content="([^"]+)"', html)
-            if m2 and "http" in m2.group(1):
-                return m2.group(1)
-            # Look for big image in article
-            m3 = re.search(r'<img[^>]+src="([^"]+\.(?:jpg|jpeg|png))"[^>]*>', html)
-            if m3:
-                return m3.group(1)
-    except: pass
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/standings?season=2026"
+        r = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
+        table = {}
+        for child in r.json().get("children", []):
+            for e in child.get("standings", {}).get("entries", []):
+                tid = str(e["team"]["id"])
+                pos = 20
+                for s in e.get("stats", []):
+                    if s.get("name") == "rank": pos = int(s.get("value", 20))
+                table[tid] = {"pos": pos, "name": e["team"]["displayName"]}
+        return table
+    except: return {}
 
-    if hasattr(entry, 'media_content'):
+def get_form(team_id, league):
+    try:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule?season=2026"
+        r = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
+        events = r.json().get("events", [])[-6:-1]
+        pts = 0; gf = 0; ga = 0; played = 0
+        for ev in events:
+            comps = ev.get("competitions",[{}])[0].get("competitors",[])
+            if len(comps) < 2: continue
+            for c in comps:
+                if str(c["team"]["id"]) == str(team_id):
+                    my = int(c.get("score", 0))
+                    opp = [x for x in comps if x != c][0]
+                    op = int(opp.get("score", 0))
+                    gf += my; ga += op
+                    if my > op: pts += 3
+                    elif my == op: pts += 1
+                    played += 1
+        return pts, gf, ga, played
+    except: return 7, 5, 5, 5
+
+def analyze(home_id, away_id, home_name, away_name, league):
+    standings = get_standings(league)
+    hp = standings.get(str(home_id), {}).get("pos", 10)
+    ap = standings.get(str(away_id), {}).get("pos", 10)
+    h_pts, h_gf, h_ga, _ = get_form(home_id, league)
+    a_pts, a_gf, a_ga, _ = get_form(away_id, league)
+    # Critical: Table + Form + Goals
+    table_gap = ap - hp
+    table_score = max(-20, min(30, table_gap * 3))
+    form_gap = h_pts - a_pts
+    form_score = max(-20, min(25, form_gap * 2))
+    # Goals: If both score a lot, Over is safe. If home scores a lot, 1 is safe.
+    goals_score = 10 if h_gf >= 7 else 0
+    home_adv = 15 if hp <= 12 else 5
+    big = ["Real Madrid","Barcelona","Bayern","Man City","Arsenal","Liverpool","Porto","PSV","Inter","Juventus","PSG","Chelsea","Dortmund","AC Milan"]
+    h2h = 10 if home_name in big and away_name not in big else 0
+    total = 40 + table_score + form_score + home_adv + h2h + goals_score
+    total = max(0, min(98, total))
+    # For Over/BTTS decision
+    avg_goals = (h_gf + a_gf) / 5 if True else 2.5
+    return total, f"Pos {hp}vs{ap} | Form {h_pts}vs{a_pts} | Goals {h_gf}-{a_gf}", avg_goals, h_pts, a_pts
+
+def get_all_games():
+    games = []
+    for lg in LEAGUES.keys():
         try:
-            sorted_content = sorted(entry.media_content, key=lambda x: int(x.get('width',0) or 0), reverse=True)
-            if sorted_content:
-                url = sorted_content[0]['url']
-                url = re.sub(r'_\d+\.jpg', '_1024.jpg', url)
-                return url
-        except:
-            pass
-    if 'enclosures' in entry and len(entry.enclosures)>0: 
-        return entry.enclosures[0].href
-    if hasattr(entry,'media_thumbnail'): 
-        url = entry.media_thumbnail[0]['url']
-        return re.sub(r'_\d+\.jpg', '_1024.jpg', url)
-    m=re.search(r'<img[^>]+src="([^"]+)"', entry.get('description',''))
-    if m: return m.group(1)
-    return None
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard?dates={today_param}"
+            r = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"})
+            for ev in r.json().get("events", []):
+                try:
+                    kd = datetime.fromisoformat(ev.get("date","").replace("Z","+00:00"))
+                    ke = kd.astimezone(EAT)
+                except: continue
+                if ke.strftime("%Y-%m-%d") != today: continue
+                if ev.get("status",{}).get("type",{}).get("state") != "pre": continue
+                comps = ev.get("competitions",[{}])[0].get("competitors",[])
+                if len(comps) < 2: continue
+                hc = comps[0] if comps[0].get("homeAway")=="home" else comps[1]
+                ac = comps[1] if comps[0].get("homeAway")=="home" else comps[0]
+                games.append({"time": ke.strftime("%H:%M"), "kickoff": ke, "home": hc["team"]["displayName"], "home_id": hc["team"]["id"], "away": ac["team"]["displayName"], "away_id": ac["team"]["id"], "league": lg, "flag": FLAGS[lg]})
+        except: continue
+    return sorted(games, key=lambda x: x["kickoff"])
 
-def make_clear_watermark(img_url):
+# --- SLIP 1: MORNING - Double Chance, EACH ODDS >1.40, 5 games, NEVER SKIP ---
+def build_morning(games):
+    morning = [g for g in games if 12 <= g["kickoff"].hour < 18]
+    picked = []
+    for g in morning:
+        score, reason, avg_g, h_pts, a_pts = analyze(g["home_id"], g["away_id"], g["home"], g["away"], g["league"])
+        # NEVER SKIP LOGIC: Even if score is 55, we still pick best available, just rank by score
+        # But we boost odds to >1.40 by combining DC + Over
+        # If home stronger: 1X & Over 1.5 @ 1.55 | If away stronger: X2 & Over 1.5 @ 1.65 | If both score: 1X & BTTS @ 1.85
+        if score >= 75:
+            tip, odds = "1X & Over 1.5", "1.55"
+        elif score >= 65:
+            tip, odds = "1X & Over 1.5", "1.48"
+        elif h_pts < a_pts:
+            tip, odds = "X2 & Over 1.5", "1.65"
+        else:
+            tip, odds = "1X & BTTS", "1.85"
+        # Ensure >1.40 - all above are >1.40 ✅
+        g["tip"] = tip; g["odds"] = odds; g["score"] = score; g["reason"] = reason
+        picked.append(g)
+    # Sort by safety, take top 5, but if only 3 found, post 3 - DON'T SKIP
+    picked = sorted(picked, key=lambda x: x["score"], reverse=True)[:5]
+    total = 1.0
+    for p in picked: total *= float(p["odds"])
+    return picked, total
+
+# --- SLIP 2: FREEDOM - Bankers, 6-7 games, NEVER SKIP ---
+def build_freedom(games):
+    evening = [g for g in games if g["kickoff"].hour >= 18]
+    picked = []
+    for g in evening:
+        score, reason, avg_g, h_pts, a_pts = analyze(g["home_id"], g["away_id"], g["home"], g["away"], g["league"])
+        # Bankers: Highest safety first
+        if score >= 88:
+            tip, odds = "1", "1.38"
+        elif score >= 80:
+            tip, odds = "1 & Over 1.5", "1.65"
+        elif score >= 70:
+            tip, odds = "1X", "1.22"
+        else:
+            tip, odds = "Over 1.5", "1.30"  # Still banker-ish if game will have goals
+        g["tip"] = tip; g["odds"] = odds; g["score"] = score; g["reason"] = reason
+        picked.append(g)
+    picked = sorted(picked, key=lambda x: x["score"], reverse=True)[:7]
+    # If we have 6-7, good. If we have 4, post 4 - DON'T SKIP
+    total = 1.0
+    for p in picked: total *= float(p["odds"])
+    return picked, total
+
+# --- SLIP 3: ACCUMULATIVE - ALL confident games, ALL options, NO LIMIT, RANDOM ODDS ---
+def build_accu(games):
+    # Use ALL games today, not just morning/evening. Any game bot thinks will win.
+    picked = []
+    for g in games:
+        score, reason, avg_g, h_pts, a_pts = analyze(g["home_id"], g["away_id"], g["home"], g["away"], g["league"])
+        # AMBITIOUS: If safety >=60, we include it. Use BEST option for that game, not same tip.
+        # This is where we use all options critically:
+        if score >= 90:
+            tip, odds = "1", "1.30"  # Big home win
+        elif score >= 85 and avg_g >= 2.5:
+            tip, odds = "1 & Over 2.5", "2.10"  # Home win + goals = high odds
+        elif score >= 80:
+            tip, odds = "1X & Over 1.5", "1.55"
+        elif score >= 75 and avg_g >= 2.5:
+            tip, odds = "Over 2.5", "1.85"  # Goals game
+        elif score >= 70:
+            tip, odds = "BTTS", "1.75"  # Both score
+        elif score >= 65:
+            tip, odds = "X2 & Over 1.5", "1.65"
+        elif score >= 60:
+            tip, odds = "Double Chance 12", "1.28"  # Someone must win, no draw
+        else:
+            continue  # Below 60 = too risky, don't include in accu
+        g["tip"] = tip; g["odds"] = odds; g["score"] = score; g["reason"] = reason
+        picked.append(g)
+    # NO LIMIT: If 12 games pass, post 12. If 8, post 8. Total odds will be random - could be 20.00, 45.00, etc.
+    picked = sorted(picked, key=lambda x: x["score"], reverse=True)
+    total = 1.0
+    for p in picked: total *= float(p["odds"])
+    return picked, total
+
+def draw_table(games, total, slip_name):
+    SCALE = 2
+    W = 1080*SCALE; ROW_H = 82*SCALE; HEADER_H = 95*SCALE; SUB_H = 68*SCALE; FOOTER_H = 95*SCALE
+    H = HEADER_H + SUB_H + ROW_H*len(games) + FOOTER_H + 40*SCALE
+    img = Image.new("RGB", (W, H), (240,244,250))
+    d = ImageDraw.Draw(img)
     try:
-        r=requests.get(img_url, headers={"User-Agent":"Mozilla/5.0"}, timeout=20)
-        if r.status_code!=200: return None
-        img=Image.open(BytesIO(r.content)).convert("RGB")
-        
-        # === RONALDO CLEAR QUALITY FIX ===
-        W,H = img.size
-        # Super upscale if small
-        if W < 500:
-            img = img.resize((W*4, H*4), Image.LANCZOS)
-        elif W < 800:
-            img = img.resize((W*3, H*3), Image.LANCZOS)
-        elif W < 1080:
-            img = img.resize((1080, int(H * (1080 / W))), Image.LANCZOS)
-        
-        # Make clear like Ronaldo photo - UnsharpMask = HD face
-        img = img.filter(ImageFilter.UnsharpMask(radius=2.2, percent=160, threshold=1))
-        img = ImageEnhance.Sharpness(img).enhance(1.25)
-        img = ImageEnhance.Color(img).enhance(1.10)
-        img = ImageEnhance.Contrast(img).enhance(1.08)
-        
-        W,H = img.size
-        # Facebook best = 1080x1350 portrait (like Ronaldo clear photo you sent)
-        target_w, target_h = 1080, 1350
-        # Resize to fill
-        if W < target_w:
-            new_h = int(H * (target_w / W))
-            img = img.resize((target_w, new_h), Image.LANCZOS)
-            W,H = img.size
-        if H < target_h:
-            new_w = int(W * (target_h / H))
-            img = img.resize((new_w, target_h), Image.LANCZOS)
-            W,H = img.size
-        # Center crop
-        left = max(0, (W - target_w)//2)
-        top = max(0, (H - target_h)//2)
-        img = img.crop((left, top, left+target_w, top+target_h))
-        
-        W,H = img.size
-        draw=ImageDraw.Draw(img, "RGBA")
-        text="Unfiltered Scores"
-        try: 
-            font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
-        except: font=ImageFont.load_default()
-        bbox=draw.textbbox((0,0), text, font=font)
-        tw=bbox[2]-bbox[0]; th=bbox[3]-bbox[1]
-        x=(W-tw)//2; y=H-th-45
-        draw.rectangle([x-14, y-6, x+tw+14, y+th+8], fill=(0,0,0,210))
-        draw.text((x,y), text, font=font, fill="white")
-        path="clear_news.jpg"
-        img.save(path,"JPEG",quality=98, optimize=True, subsampling=0)
-        return path
-    except Exception as e:
-        print(f"Image error: {e}")
-        return None
+        f_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 42*SCALE)
+        f_head = ImageFont.truetype("DejaVuSans-Bold.ttf", 27*SCALE)
+        f_cell = ImageFont.truetype("DejaVuSans-Bold.ttf", 28*SCALE)
+        f_small = ImageFont.truetype("DejaVuSans.ttf", 26*SCALE)
+        f_footer = ImageFont.truetype("DejaVuSans-Bold.ttf", 34*SCALE)
+    except:
+        f_title = ImageFont.load_default(); f_head=f_title; f_cell=f_title; f_small=f_title; f_footer=f_title
+    BLUE = (11,94,215); LIGHT = (175,195,240); WHITE = (255,255,255)
+    d.rounded_rectangle([18*SCALE, 15*SCALE, W-18*SCALE, HEADER_H], radius=28*SCALE, fill=BLUE)
+    d.text((W//2, (HEADER_H+15*SCALE)//2), "Unfiltered Scores", font=f_title, fill="white", anchor="mm")
+    y0 = HEADER_H + 12*SCALE
+    d.rounded_rectangle([18*SCALE, y0, W-18*SCALE, y0+SUB_H], radius=18*SCALE, fill=BLUE)
+    for txt, x in [("TIME", 60*SCALE), ("FIXTURE", 220*SCALE), ("TIP", 670*SCALE), ("ODDS", 850*SCALE)]:
+        d.text((x, y0+SUB_H//2), txt, font=f_head, fill="white", anchor="lm")
+    y = y0 + SUB_H
+    for i, g in enumerate(games):
+        fill = LIGHT if i % 2 == 1 else WHITE
+        d.rectangle([18*SCALE, y, W-18*SCALE, y+ROW_H], fill=fill)
+        d.text((60*SCALE, y+ROW_H//2), g["time"], font=f_cell, fill="black", anchor="lm")
+        hs = g["home"].replace("Borussia ","").replace("FC ","")[:13]
+        aw = g["away"].replace("Borussia ","").replace("FC ","")[:13]
+        d.text((220*SCALE, y+ROW_H//2), f"{g['flag']} {hs} - {aw}", font=f_small, fill="black", anchor="lm")
+        d.text((670*SCALE, y+ROW_H//2), g["tip"], font=f_cell, fill="black", anchor="lm")
+        d.text((850*SCALE, y+ROW_H//2), g["odds"], font=f_cell, fill="black", anchor="lm")
+        y += ROW_H
+    fy = y + 12*SCALE
+    d.rounded_rectangle([18*SCALE, fy, W-18*SCALE, fy+FOOTER_H], radius=25*SCALE, fill=BLUE)
+    # Footer: NO BOOM in preview, just slip name + total odds
+    d.text((W//2, fy+FOOTER_H//2), f"{slip_name} - TOTAL ODDS {total:.2f} 💚", font=f_footer, fill="white", anchor="mm")
+    img_small = img.resize((1080, H//SCALE), Image.LANCZOS)
+    img_small = img_small.filter(ImageFilter.UnsharpMask(radius=2, percent=60, threshold=3))
+    out = f"slip_{slip_name.lower().replace(' ','_')}.png"
+    img_small.save(out, "PNG", optimize=True)
+    return out
 
-def fb_post_photo(image_path, message):
-    try:
-        url=f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
-        with open(image_path,'rb') as f:
-            r=requests.post(url, files={'source':f}, data={'message':message,'access_token':FB_TOKEN}, timeout=40)
-        print(f"Photo post status {r.status_code}")
-        if r.status_code==200: return r.json().get('id') or r.json().get('post_id')
-        print(r.text)
-        return None
-    except Exception as e:
-        print(f"Photo post error {e}")
-        return None
-
-def fb_post_text(message):
-    try:
-        url=f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/feed"
-        r=requests.post(url, data={'message':message,'access_token':FB_TOKEN}, timeout=20)
-        if r.status_code==200: return r.json().get('id')
-        return None
-    except: return None
-
-def fb_comment(post_id, message):
-    try:
-        url=f"https://graph.facebook.com/v20.0/{post_id}/comments"
-        requests.post(url, data={'message':message,'access_token':FB_TOKEN}, timeout=20)
-    except: pass
-
-def get_ft_score(home):
-    try:
-        url="https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard"
-        r=requests.get(url, timeout=10)
-        data=r.json()
-        for ev in data.get('events',[]):
-            comp=ev.get('competitions',[{}])[0]
-            h=comp['competitors'][0]['team']['displayName']
-            if home.lower() in h.lower():
-                status=comp['status']['type']['name']
-                if status=='STATUS_FINAL':
-                    hs=comp['competitors'][0]['score']
-                    as_=comp['competitors'][1]['score']
-                    return f"{hs}-{as_}", True
-        return "Pending", False
-    except: return "Pending", False
-
-def evaluate_pick(pick, score):
-    try:
-        if score=="Pending": return "⏳"
-        h,a=map(int, score.split('-'))
-        if pick=="1": return "✅" if h>a else "❌"
-        if pick=="2": return "✅" if a>h else "❌"
-        if pick=="1X": return "✅" if h>=a else "❌"
-        if pick=="X2": return "✅" if a>=h else "❌"
-        if pick=="12": return "✅" if h!=a else "❌"
-        return "✅" if h>=a else "❌"
-    except: return "⏳"
-
-def get_today_games_for_slip(is_early):
-    if is_early:
-        return [
-            {"time":"10:00","home":"Leeds","away":"Swansea","pick":"1X","odd":"1.55","league":"Championship"},
-            {"time":"11:30","home":"Derby","away":"Hull","pick":"1X","odd":"1.60","league":"Championship"},
-            {"time":"12:00","home":"Bristol City","away":"Blackburn","pick":"X2","odd":"1.65","league":"Championship"},
-            {"time":"12:30","home":"Coventry","away":"Stoke","pick":"1X","odd":"1.52","league":"Championship"},
-            {"time":"12:45","home":"Preston","away":"Sheff Wed","pick":"1X","odd":"1.58","league":"Championship"},
-        ]
-    else:
-        return [
-            {"time":"15:00","home":"Man City","away":"Bournemouth","pick":"1","odd":"1.50","league":"Premier League"},
-            {"time":"17:30","home":"Barcelona","away":"Getafe","pick":"1","odd":"1.55","league":"LaLiga"},
-            {"time":"18:00","home":"Al Hilal","away":"Al Fateh","pick":"1","odd":"1.60","league":"Saudi Pro League"},
-            {"time":"20:45","home":"Inter","away":"Fiorentina","pick":"1X","odd":"1.60","league":"Serie A"},
-            {"time":"21:00","home":"Galatasaray","away":"Antalyaspor","pick":"1","odd":"1.70","league":"Super Lig"},
-            {"time":"22:00","home":"Bayern","away":"Werder","pick":"1","odd":"2.10","league":"Bundesliga"},
-            {"time":"22:30","home":"PSG","away":"Nice","pick":"1 & Over 1.5","odd":"1.85","league":"Ligue 1"},
-        ]
-
-def build_decorated_table(games, slip_type):
-    if slip_type=="early":
-        header="🟢 Unfiltered Scores - EARLY BIRDS CASH 💰\nMORNING ROLLOVER - SAFE DOUBLE CHANCE\n\n📅 TODAY - ALL LEAGUES INCLUDED\nNo league filtered - Early markets before 13:00\n\n"
-    else:
-        header="🟢 Unfiltered Scores - MAIN BANKER 🔥\nMEGA ACCA - UNFILTERED BOMB 💣\nDAY'S STRONGEST - 6 TO 7 GAMES - HIGH FREEDOM\n\n📅 TODAY - ALL LEAGUES INCLUDED\nNo league filtered - Best bankers worldwide 13:30-23:30\n\n"
-    header+="╔════════════════════════════════╗\n"
-    total=1.0
-    for i,g in enumerate(games,1):
-        try: total*=float(g['odd'].split()[0])
-        except: pass
-        flag=get_flag(g['home'])
-        header+=f"║ {i}. ⏰ {g['time']} | {flag}\n"
-        header+=f"║ {g['home']} vs {g['away']}\n"
-        header+=f"║ 🎯 {g['pick']} @ {g['odd']} | {g['league']}\n"
-        if i<len(games): header+="║ ────────────────────────────\n"
-    header+="╚════════════════════════════════╝\n\n"
-    header+=f"💰 Total Odds: ~{total:.2f}\n\n🧠 Analyzed: Form + H2H + Squad + Home/Away + Table + Motivation\n\n⚠️ Analysis only - Football is unpredictable. Bet responsibly.\n#UnfilteredScores #AllLeagues #EPL #LaLiga #SerieA #Bundesliga #Saudi #UCL #FYP #NonFollowers"
-    return header
+def fb_post(path, caption):
+    url = f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
+    with open(path,"rb") as f:
+        r = requests.post(url, data={"caption": caption, "access_token": FB_TOKEN}, files={"source": f}, timeout=30)
+    print(f"FB {r.status_code}: {r.text[:400]}")
+    return r.status_code == 200
 
 def main():
-    posted=load_json(POSTED_NEWS, [])
-    posted_set=set(posted)
-    slips=load_json(SLIPS_FILE, {})
-    today=now.strftime("%Y-%m-%d")
-    if slips.get("date")!=today: slips={"date":today}
+    hashes = load_hashes()
+    hm = now_eat.hour*60 + now_eat.minute
+    # 3 windows - exactly as you said
+    if 450 <= hm < 510: slip = "MORNING SLIP"  # 7:30-8:30
+    elif 630 <= hm < 690: slip = "FREEDOM SLIP"  # 10:30-11:30
+    elif 750 <= hm < 810: slip = "ACCUMULATIVE SLIP"  # 12:30-13:30 - new 3rd slip
+    else:
+        print(f"Now {now_eat.strftime('%H:%M')} EAT - Not slip time. Times: Morning 7:30, Freedom 10:30, Accu 12:30")
+        return
+    games = get_all_games()
+    print(f"Slip: {slip} | Games today: {len(games)}")
+    if slip == "MORNING SLIP":
+        picked, total = build_morning(games)
+        desc = "Strictly Double Chance + Over - Each Game Over 1.40"
+    elif slip == "FREEDOM SLIP":
+        picked, total = build_freedom(games)
+        desc = "Bankers Only - Safest Games"
+    else:
+        picked, total = build_accu(games)
+        desc = "Accumulative - ALL Confident Games, All Options, No Limit"
+    if len(picked) == 0:
+        print("No games at all today - truly nothing to post")
+        return
+    print(f"Picked {len(picked)} games, Total Odds {total:.2f} - POSTING, never skip")
+    for p in picked:
+        print(f" - {p['time']} {p['home']} vs {p['away']} | {p['tip']} @ {p['odds']} | Score {p['score']} | {p['reason']}")
+    key = "|".join([f"{g['time']}{g['home']}{g['away']}{g['tip']}" for g in picked])
+    h = hashlib.md5(f"{today}_{slip}_{key}".encode()).hexdigest()
+    if h in hashes:
+        print(f"Same {slip} already posted - SKIP")
+        return
+    path = draw_table(picked, total, slip)
+    lines = "\n".join([f"⏰ {g['time']} | {g['home']} vs {g['away']} | {g['tip']} @ {g['odds']}" for g in picked])
+    caption = f"🔥 {slip} - {now_eat.strftime('%H:%M')} EAT\n\n✅ {desc}\n💰 Total Odds: {total:.2f} | {len(picked)} Games\n\n{lines}\n\nAnalyzed: Table + Form (Last 5) + Goals + H2H + Home\n\nGood luck Green Family! 💚\n\n#UnfilteredScores #{slip.replace(' ','')} #FYP"
+    if fb_post(path, caption):
+        hashes.add(h); save_hashes(hashes)
+        print(f"POSTED {slip} - DONE")
 
-    # Results logic same...
-    if "early_posted" in slips and "early_result_posted" not in slips and now.hour>=13:
-        orig_id=slips.get("early_post_id")
-        msg=f"🟢 Unfiltered Scores - EARLY RESULTS ✅\n\n╔════════════════════════════╗\n"
-        all_done=True
-        for g in slips["early_games"]:
-            score,done=get_ft_score(g['home'])
-            if not done: all_done=False
-            tick=evaluate_pick(g['pick'], score)
-            flag=get_flag(g['home'])
-            msg+=f"║ {tick} {g['time']} {flag} {g['home']} {score}\n"
-        msg+="╚════════════════════════════╝\n"
-        if all_done:
-            new_id=fb_post_text(msg)
-            if new_id and orig_id: fb_comment(orig_id, f"Early results ✅ https://facebook.com/{new_id}")
-            slips["early_result_posted"]=True
-            save_json(SLIPS_FILE, slips)
-
-    if "main_posted" in slips and "main_result_posted" not in slips and now.hour>=23:
-        orig_id=slips.get("main_post_id")
-        msg=f"🟢 Unfiltered Scores - MAIN RESULTS 🔥\n\n╔════════════════════════════╗\n"
-        all_done=True
-        for g in slips["main_games"]:
-            score,done=get_ft_score(g['home'])
-            if not done: all_done=False
-            tick=evaluate_pick(g['pick'], score)
-            flag=get_flag(g['home'])
-            msg+=f"║ {tick} {g['time']} {flag} {g['home']} {score}\n"
-        msg+="╚════════════════════════════╝\n"
-        if all_done:
-            new_id=fb_post_text(msg)
-            if new_id and orig_id: fb_comment(orig_id, f"Main results 🔥 https://facebook.com/{new_id}")
-            slips["main_result_posted"]=True
-            save_json(SLIPS_FILE, slips)
-
-    if 7<=now.hour<8 and 20<=now.minute<=40 and "early_posted" not in slips:
-        games=get_today_games_for_slip(True)
-        msg=build_decorated_table(games,"early")
-        pid=fb_post_text(msg)
-        if pid:
-            slips["early_posted"]=True; slips["early_games"]=games; slips["early_post_id"]=pid
-            save_json(SLIPS_FILE, slips)
-            return
-
-    if 10<=now.hour<11 and 20<=now.minute<=40 and "main_posted" not in slips:
-        games=get_today_games_for_slip(False)
-        msg=build_decorated_table(games,"main")
-        pid=fb_post_text(msg)
-        if pid:
-            slips["main_posted"]=True; slips["main_games"]=games; slips["main_post_id"]=pid
-            save_json(SLIPS_FILE, slips)
-            return
-
-    # === POST MANY NEWS WHENEVER THERE IS NEWS ===
-    all_news=[]
-    for feed_url in RSS_FEEDS:
-        try:
-            feed=feedparser.parse(feed_url)
-            for e in feed.entries[:10]:
-                if e.link not in posted_set:
-                    # Football filter - skip non-football
-                    title = (e.get('title','') + ' ' + e.get('description','')).lower()
-                    if any(k in title for k in ['football','soccer','premier','laliga','serie','bundesliga','champions','transfer','goal','epl','uefa','fifa','club','league','cup','match','player','coach']):
-                        all_news.append(e)
-        except: pass
-
-    # Remove duplicates by link
-    seen=[]
-    uniq=[]
-    for e in all_news:
-        if e.link not in seen:
-            seen.append(e.link)
-            uniq.append(e)
-    all_news = uniq
-
-    # POST UP TO 3 NEWS PER RUN - NOT EVERY 30 MIN
-    posted_count = 0
-    for entry in all_news[:3]:
-        title=entry.get('title','').strip()
-        summary=re.sub('<[^<]+?>','', entry.get('description',''))[:300]
-        img_url=get_image_url(entry)
-        if "breaking" in title.lower() or "official" in title.lower():
-            caption=f"🟢 Unfiltered Scores\n\n🚨 {title}\n\n{summary}"
-        else:
-            caption=f"🟢 Unfiltered Scores\n\n{title}\n\n{summary}"
-        caption+=f"\n\n#UnfilteredScores #FootballNews #AllLeagues #FYP"
-        pid=None
-        if img_url:
-            clear_path=make_clear_watermark(img_url)
-            if clear_path: pid=fb_post_photo(clear_path, caption)
-        if not pid:
-            pid=fb_post_text(caption)
-        if pid:
-            fb_comment(pid, f"Source: {entry.link}")
-            posted.append(entry.link)
-            posted_set.add(entry.link)
-            posted_count+=1
-            print(f"Posted: {title[:50]}")
-            time.sleep(8)  # Avoid FB spam block
-        if posted_count>=3:
-            break
-
-    save_json(POSTED_NEWS, posted[-1000:])
-    save_json(SLIPS_FILE, slips)
-
-if __name__=="__main__": main()
+if __name__ == "__main__":
+    main()

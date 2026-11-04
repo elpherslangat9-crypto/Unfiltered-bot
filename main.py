@@ -57,8 +57,8 @@ def load_events():
         with open(EVENTS_FILE,"r") as f: return json.load(f)
     except: return {}
 def save_events(e):
-    yday=(now_eat-timedelta(days=1)).strftime("%Y-%m-%d")
-    clean={k:v for k,v in e.items() if today in k or yday in k}
+    # Only keep TODAY events - no yesterday spam
+    clean={k:v for k,v in e.items() if today in k}
     with open(EVENTS_FILE,"w") as f: json.dump(clean, f)
 def fb_post(msg):
     for attempt in range(2):
@@ -127,7 +127,7 @@ def ft_comment(home,away,hg,ag,prev_hg,prev_ag):
     if abs(hg-ag)>=3: return f"😳 {winner} DESTROYED them! {hg}-{ag}! Statement win! 👇"
     if total>=5: return f"🎢 {hg}-{ag} FT! 7-goal thriller! Best game of the day? 👇"
     return f"✅ FT: {winner} takes it {hg}-{ag}! Did your bet win? 👇 Follow for tomorrow's slips 💚"
-# === V90 ESPN ONLY - NEVER BLOCKED, NEVER SLEEPS ===
+# === V91 ESPN ONLY - TODAY ONLY - ALL LEAGUES ===
 def espn_get(url):
     for attempt in range(2):
         try:
@@ -137,29 +137,28 @@ def espn_get(url):
     return {}
 def get_espn_games():
     all_games=[];seen=set()
-    dates_to_check=[today.replace('-',''), (now_eat - timedelta(days=1)).strftime("%Y%m%d"), (now_eat + timedelta(days=1)).strftime("%Y%m%d")]
-    for date_str_param in dates_to_check:
-        for lg_key, lg_name in LEAGUES.items():
-            url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg_key}/scoreboard?dates={date_str_param}"
-            data=espn_get(url)
-            for ev in data.get("events",[]):
-                eid=str(ev.get("id"))
-                if eid in seen: continue
-                seen.add(eid)
-                status=ev.get("status",{}).get("type",{}).get("state");detail=ev.get("status",{}).get("type",{}).get("detail","");date_str=ev.get("date","")
-                # FIX: ESPN says state=in during Halftime, fix it
-                if "Halftime" in detail: status="ht"
-                comps=ev.get("competitions",[{}])[0].get("competitors",[])
-                if len(comps)<2: continue
-                home=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
-                away=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
-                hg=int(comps[0].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[1].get("score",0))
-                ag=int(comps[1].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[0].get("score",0))
-                clock=ev.get("status",{}).get("displayClock","")
-                try:kickoff_eat=datetime.fromisoformat(date_str.replace("Z","+00:00")).astimezone(EAT)
-                except:kickoff_eat=None
-                all_games.append({"league_key":lg_key,"league_name":lg_name,"id":eid,"home":home,"away":away,"hg":hg,"ag":ag,"state":status,"detail":detail,"clock":clock,"minute_str":parse_min(clock) if status!="ht" else "HT","kickoff_eat":kickoff_eat,"date_param":date_str_param,"norm_key":f"{norm(home)}_vs_{norm(away)}"})
-    print(f"ESPN: {len(all_games)} games")
+    # TODAY ONLY - No yesterday, no tomorrow, no spam
+    date_str_param=today.replace('-','')
+    for lg_key, lg_name in LEAGUES.items():
+        url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg_key}/scoreboard?dates={date_str_param}"
+        data=espn_get(url)
+        for ev in data.get("events",[]):
+            eid=str(ev.get("id"))
+            if eid in seen: continue
+            seen.add(eid)
+            status=ev.get("status",{}).get("type",{}).get("state");detail=ev.get("status",{}).get("type",{}).get("detail","");date_str=ev.get("date","")
+            if "Halftime" in detail: status="ht"
+            comps=ev.get("competitions",[{}])[0].get("competitors",[])
+            if len(comps)<2: continue
+            home=comps[0]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[1]["team"]["displayName"]
+            away=comps[1]["team"]["displayName"] if comps[0].get("homeAway")=="home" else comps[0]["team"]["displayName"]
+            hg=int(comps[0].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[1].get("score",0))
+            ag=int(comps[1].get("score",0)) if comps[0].get("homeAway")=="home" else int(comps[0].get("score",0))
+            clock=ev.get("status",{}).get("displayClock","")
+            try:kickoff_eat=datetime.fromisoformat(date_str.replace("Z","+00:00")).astimezone(EAT)
+            except:kickoff_eat=None
+            all_games.append({"league_key":lg_key,"league_name":lg_name,"id":eid,"home":home,"away":away,"hg":hg,"ag":ag,"state":status,"detail":detail,"clock":clock,"minute_str":parse_min(clock) if status!="ht" else "HT","kickoff_eat":kickoff_eat,"date_param":date_str_param,"norm_key":f"{norm(home)}_vs_{norm(away)}"})
+    print(f"ESPN TODAY {today}: {len(all_games)} games")
     return all_games
 def get_espn_summary(league_key, event_id):
     url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_key}/summary?event={event_id}"
@@ -197,21 +196,20 @@ def get_lineups(league_key, event_id):
     return "\n".join(txt) if txt else None
 def main():
     posted=load_posted(); last_scores=load_scores(); last_events=load_events()
-    print(f"=== V90 ESPN ONLY - NEVER SLEEPS {now_eat} ===")
+    print(f"=== V91 ESPN ONLY TODAY ONLY {now_eat} ===")
     espn_games=get_espn_games()
-    # NEVER WIPE: If ESPN fails this run, abort without saving
     if len(espn_games)==0:
-        print("ESPN 0 - ABORT, DO NOT WIPE SCORES")
+        print("ESPN 0 TODAY - ABORT, DO NOT WIPE SCORES")
         return
     new_scores={}; new_events={}
     for g in espn_games:
         eid=g["id"];key=f"espn_{eid}";home=g["home"];away=g["away"];hg=g["hg"];ag=g["ag"];state=g["state"];league_name=g["league_name"];league_key=g["league_key"];event_id=eid;kickoff_eat=g["kickoff_eat"];match_date=g["date_param"]
         minute_str=g["minute_str"];score_str=f"{hg}-{ag}";new_scores[key]={"score":score_str,"hg":hg,"ag":ag,"state":state};hashtags=get_hashtags(league_name);prev=last_scores.get(key);prev_hg=prev.get("hg",0) if prev else 0;prev_ag=prev.get("ag",0) if prev else 0;prev_state=prev.get("state") if prev else None
         follow="\n\nFollow @Unfiltered Scores 🔔 Turn ON notifications - You will miss BOOM if you don't!"
-        # === LINEUPS EPL + UCL ===
-        if league_key in ["eng.1","uefa.champions"] and state=="pre" and kickoff_eat:
+        # === 1. LINEUPS - ALL LEAGUES, 120 mins before ===
+        if state=="pre" and kickoff_eat:
             minutes_to_kick=(kickoff_eat - now_eat).total_seconds()/60
-            if 0 <= minutes_to_kick <= 90:
+            if 0 <= minutes_to_kick <= 120:
                 gk_lineup=f"lineup_{key}_{match_date}"
                 if gk_lineup not in posted:
                     lineup=get_lineups(league_key, event_id)
@@ -219,19 +217,22 @@ def main():
                         msg=f"📋 LINEUPS OUT! - {int(minutes_to_kick)} MINS TO KICK OFF!\n\n🔥 {home} vs {away}\n🏆 {league_name}\n⏰ {kickoff_eat.strftime('%H:%M')} EAT\n\n{lineup}\n\nWho wins? Comment 1 for {home}, 2 for {away} 👇\n\n{hashtags}{follow}"
                         if fb_post(msg): posted.add(gk_lineup)
                     else: print(f"Lineup not yet available {home} vs {away} - {int(minutes_to_kick)} mins to go, will retry")
-        # === KICKOFF - FIXED: Use state change, not minute 0' ===
-        if state=="in" and prev_state=="pre":
+        # === 2. KICKOFF - NEVER MISS ===
+        kickoff_now=False
+        if state=="in" and prev_state=="pre": kickoff_now=True
+        if state=="in" and prev is None and parse_min_int(minute_str)<=15: kickoff_now=True
+        if state=="ht" and prev is None: kickoff_now=True  # First seen at HT, we missed kickoff, post it now then HT
+        if kickoff_now:
             gk=f"kickoff_{key}_{match_date}"
             if gk not in posted:
                 ko_pick=pick(["KICK OFF! We are LIVE! Who scores first? 👇","⏰ KICK OFF! Buckle up, this one will be spicy!","KICK OFF! Drop your score prediction 👇"], key)
                 msg=f"⏰ KICK OFF!\n\n🔥 {home} vs {away}\n🏆 {league_name}\n\n{ko_pick}\n\n{hashtags}{follow}"
                 if fb_post(msg): posted.add(gk)
-        # === GOAL - Normal + CATCH-UP if bot slept ===
+        # === 3. GOAL - Normal + Catch-up if first seen already scored ===
         goal_to_post=False;catchup=False
         if prev and (hg>prev.get("hg",0) or ag>prev.get("ag",0)):
             goal_to_post=True
         elif not prev and (hg+ag)>0 and state in ["in","ht","post"]:
-            # Bot first saw game already 2-0 - don't miss it, post catch-up
             goal_to_post=True;catchup=True;prev_hg=0;prev_ag=0
         if goal_to_post:
             gk=f"goal_{key}_{score_str}_{match_date}"
@@ -243,7 +244,7 @@ def main():
                 if scorer: msg=f"{prefix} {minute_str}!\n\n🔥 {home} {score_str} {away}\n⚽ {scorer} ({minute_str})\n🏆 {league_name}\n\n{smart}\n\n{cta}\n\n{hashtags}{follow}"
                 else: msg=f"{prefix} {minute_str}!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{cta}\n\n{hashtags}{follow}"
                 if fb_post(msg): posted.add(gk)
-        # === RED / PENALTY / VAR - Also check at FT if missed during live ===
+        # === 4. RED / PENALTY / VAR - Check in, ht AND post, so never miss ===
         if state in ["in","ht","post"] and event_id and league_key:
             events=get_espn_key_events(league_key, event_id)
             for ev in events:
@@ -257,14 +258,14 @@ def main():
                 elif ev["type"]=="var": msg=f"📺 VAR CHECK {ev['minute']}!\n\n🔥 {home} {score_str} {away}\n{ev['text']}\n🏆 {league_name}\n\nVAR... Love it or hate it? 👇\n\n{hashtags}{follow}"
                 if msg:
                     if fb_post(msg): posted.add(ev_key);new_events[ev_key]=True
-        # === HT - FIXED: posts even if first seen at HT ===
+        # === 5. HT ===
         if state=="ht":
             gk=f"ht_{key}_{score_str}_{match_date}"
             if gk not in posted:
                 smart=ht_comment(home,away,hg,ag)
                 msg=f"⏸️ HALF TIME!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{hashtags}{follow}"
                 if fb_post(msg): posted.add(gk)
-        # === FT - FIXED: posts even if first seen at FT, no 4h block ===
+        # === 6. FT - Today only, even if first seen at FT ===
         if state=="post":
             gk=f"ft_{key}_{score_str}_{match_date}"
             if gk not in posted:
@@ -272,5 +273,5 @@ def main():
                 msg=f"✅ FULL TIME!\n\n🔥 {home} {score_str} {away}\n🏆 {league_name}\n\n{smart}\n\n{hashtags}{follow}"
                 if fb_post(msg): posted.add(gk)
     save_posted(posted); save_scores(new_scores); save_events({**last_events, **new_events})
-    print(f"V90 DONE - {len(posted)} posted, ESPN ONLY, never sleeps")
+    print(f"V91 DONE - {len(posted)} posted, TODAY ONLY, ESPN ONLY, ALL LEAGUES")
 if __name__=="__main__": main()

@@ -53,38 +53,64 @@ def ft_c(h,a,hg,ag,ph,pa):
  if abs(hg-ag)>=3:return f"😳 {w} DESTROYED them! {hg}-{ag}! Statement win! 👇"
  if tot>=5:return f"🎢 {hg}-{ag} FT! 7-goal thriller! Best game of the day? 👇"
  return f"✅ FT: {w} takes it {hg}-{ag}! Did your bet win? 👇 Follow for tomorrow's slips 💚"
-# === LIVESCORE FIRST ===
+# === FIXED: LIVESCORE FIRST + ESPN FALLBACK ===
 def ls_games():
  out=[];seen=set()
- for d in [today.replace('-',''),(now_eat-timedelta(days=1)).strftime("%Y%m%d")]:
-  try:
-   r=requests.get(f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{d}?MD=1&countryCode=KE",timeout=8,headers={"User-Agent":"Mozilla/5.0"})
-   if r.status_code!=200:continue
-   for st in r.json().get("Stages",[]):
-    raw=str(st.get("Sdn","") or st.get("Cnm","") or "")
-    ln=LS_MAP.get(raw)
-    if not ln:
-     for k,v in LS_MAP.items():
-      if k.lower() in raw.lower():ln=v;break
-    if not ln:continue
-    for ev in st.get("Events",[]):
-     t1=ev.get("T1",[{}])[0].get("Nm","") if ev.get("T1") else "";t2=ev.get("T2",[{}])[0].get("Nm","") if ev.get("T2") else ""
-     if not t1 or not t2:continue
-     nk=f"{norm(t1)}_vs_{norm(t2)}"
-     if f"{nk}_{d}" in seen:continue
-     seen.add(f"{nk}_{d}")
-     es=str(ev.get("Es",""));stt="pre" if es=="1" else "in" if es in ["2","4","5","8","9"] else "ht" if es=="3" else "post" if es in ["6","7","10"] else "pre"
-     eps=str(ev.get("Eps","") or "")
-     ms="HT" if stt=="ht" else "FT" if stt=="post" else pmin(eps) if any(c.isdigit() for c in eps) else "0'"
-     ko=None
-     try:
-      raw2=str(ev.get("Esd","") or "")
-      if len(raw2)>=14 and raw2.isdigit():ko=datetime.strptime(raw2[:14],"%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).astimezone(EAT)
-     except:pass
-     out.append({"lk":TO_ESPN.get(ln,""),"ln":ln,"h":t1,"a":t2,"hg":int(ev.get("Tr1",0)) if str(ev.get("Tr1","")).isdigit() else 0,"ag":int(ev.get("Tr2",0)) if str(ev.get("Tr2","")).isdigit() else 0,"st":stt,"ms":ms,"ko":ko,"d":d,"nk":nk})
-  except Exception as e:print(f"LS fail {d}: {e}")
- print(f"LIVESCORE: {len(out)} games");return out
-# === ESPN ONLY FOR SCORER / LINEUP / RED ===
+ try:
+  r=requests.get("https://prod-public-api.livescore.com/v1/api/app/date/soccer/all/today?MD=1&countryCode=KE",timeout=8,headers={"User-Agent":"Mozilla/5.0"})
+  print(f"LS STATUS {r.status_code} LEN {len(r.text)}")
+  for st in r.json().get("Stages",[]):
+   raw=" ".join([str(st.get(k,"") or "") for k in ["Sdn","Cnm","Snm","Ctn","Sdm"]])
+   ln=None
+   for k,v in LS_MAP.items():
+    if k.lower() in raw.lower():ln=v;break
+   if not ln:
+    rl=raw.lower()
+    if "champion" in rl:ln="Champions League"
+    elif "europa" in rl:ln="Europa League"
+    elif "conference" in rl:ln="Conference League"
+    elif "premier" in rl:ln="Premier League"
+    elif "laliga" in rl or "la liga" in rl:ln="LaLiga"
+    elif "serie" in rl:ln="Serie A"
+    elif "bundesliga" in rl:ln="Bundesliga"
+    elif "ligue" in rl:ln="Ligue 1"
+    elif "eredivisie" in rl:ln="Eredivisie"
+    elif "primeira" in rl:ln="Primeira Liga"
+    elif "super lig" in rl:ln="Turkish Super Lig"
+    elif "saudi" in rl or "pro league" in rl:ln="Saudi Pro League"
+    else:ln=raw.strip() or "Football"
+   for ev in st.get("Events",[]):
+    t1=ev.get("T1",[{}])[0].get("Nm","") if ev.get("T1") else "";t2=ev.get("T2",[{}])[0].get("Nm","") if ev.get("T2") else ""
+    if not t1 or not t2:continue
+    nk=f"{norm(t1)}_vs_{norm(t2)}"
+    if nk in seen:continue
+    seen.add(nk)
+    es=str(ev.get("Es",""));stt="pre" if es=="1" else "in" if es in ["2","4","5","8","9"] else "ht" if es=="3" else "post" if es in ["6","7","10"] else "pre"
+    eps=str(ev.get("Eps","") or "");ms="HT" if stt=="ht" else "FT" if stt=="post" else pmin(eps) if any(c.isdigit() for c in eps) else "0'"
+    ko=None
+    try:
+     raw2=str(ev.get("Esd","") or "")
+     if len(raw2)>=14 and raw2.isdigit():ko=datetime.strptime(raw2[:14],"%Y%m%d%H%M%S").replace(tzinfo=timezone.utc).astimezone(EAT)
+    except:pass
+    out.append({"lk":TO_ESPN.get(ln,""),"ln":ln,"h":t1,"a":t2,"hg":int(ev.get("Tr1",0)) if str(ev.get("Tr1","")).isdigit() else 0,"ag":int(ev.get("Tr2",0)) if str(ev.get("Tr2","")).isdigit() else 0,"st":stt,"ms":ms,"ko":ko,"d":today.replace('-',''),"nk":nk})
+ except Exception as e:print(f"LS FAIL: {e}")
+ print(f"LIVESCORE GAMES: {len(out)}")
+ if not out:
+  print("LIVESCORE 0 -> ESPN FALLBACK")
+  for lk,ln in LEAGUES.items():
+   try:
+    r=requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lk}/scoreboard?dates={today.replace('-','')}",timeout=8,headers={"User-Agent":"Mozilla/5.0"})
+    print(f"ESPN {lk} {len(r.json().get('events',[]))} games")
+    for ev in r.json().get("events",[]):
+     c=ev.get("competitions",[{}])[0].get("competitors",[])
+     if len(c)<2:continue
+     h=c[0]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[1]["team"]["displayName"];a=c[1]["team"]["displayName"] if c[0].get("homeAway")=="home" else c[0]["team"]["displayName"]
+     hg=int(c[0].get("score",0)) if c[0].get("homeAway")=="home" else int(c[1].get("score",0));ag=int(c[1].get("score",0)) if c[0].get("homeAway")=="home" else int(c[0].get("score",0))
+     stt=ev.get("status",{}).get("type",{}).get("state","pre");ms=pmin(ev.get("status",{}).get("displayClock",""))
+     if stt=="post":ms="FT"
+     out.append({"lk":lk,"ln":ln,"h":h,"a":a,"hg":hg,"ag":ag,"st":stt,"ms":ms,"ko":None,"d":today.replace('-',''),"nk":f"{norm(h)}_vs_{norm(a)}"})
+   except Exception as e:print(f"ESPN FAIL {lk}: {e}")
+ print(f"FINAL GAMES: {len(out)}");return out
 _CACHE={}
 def espn_id(lk,nk,d):
  if not lk:return None
@@ -121,26 +147,22 @@ def lineups(lk,eid):
   if len(st)>=7:txt.append(f"🔵 {tm.get('team',{}).get('displayName','Team')}: {', '.join(st[:7])}...")
  return "\n".join(txt) if txt else None
 def main():
- posted=set(load(POSTED_FILE,[]));last=load(SCORES_FILE,{});lev=load(EVENTS_FILE,{});print(f"=== V84 LIVESCORE FIRST {now_eat} ===")
+ posted=set(load(POSTED_FILE,[]));last=load(SCORES_FILE,{});lev=load(EVENTS_FILE,{});print(f"=== V85 FIXED ALL {now_eat} ===")
  new={};nev={}
  for g in ls_games():
   h,a,hg,ag,st,ln,lk,ms,ko,d,nk=g["h"],g["a"],g["hg"],g["ag"],g["st"],g["ln"],g["lk"],g["ms"],g["ko"],g["d"],g["nk"]
   key=f"ls_{nk}_{d}";ss=f"{hg}-{ag}";new[key]={"score":ss,"hg":hg,"ag":ag,"state":st};ht=hashtags(ln);prev=last.get(key);ph=prev.get("hg",0) if prev else 0;pa=prev.get("ag",0) if prev else 0;ps=prev.get("state") if prev else None;fol="\n\nFollow @Unfiltered Scores 🔔 Turn ON notifications - You will miss BOOM if you don't!"
-  # LINEUP
   if lk in ["eng.1","uefa.champions"] and st=="pre" and ko:
    mk=(ko-now_eat).total_seconds()/60
    if 0<=mk<=90 and f"lineup_{key}" not in posted:
     eid=espn_id(lk,nk,d);lp=lineups(lk,eid) if eid else None
     if lp and fb(f"📋 LINEUPS OUT! - {int(mk)} MINS TO KICK OFF!\n\n🔥 {h} vs {a}\n🏆 {ln}\n⏰ {ko.strftime('%H:%M')} EAT\n\n{lp}\n\nWho wins? Comment 1 for {h}, 2 for {a} 👇\n\n{ht}{fol}"):posted.add(f"lineup_{key}")
-  # KICKOFF - pre -> in
   if st=="in" and ps=="pre" and f"kickoff_{key}" not in posted:
    if fb(f"⏰ KICK OFF!\n\n🔥 {h} vs {a}\n🏆 {ln}\n\n{pick(['KICK OFF! We are LIVE! Who scores first? 👇','⏰ KICK OFF! Buckle up, this one will be spicy!','KICK OFF! Drop your score prediction 👇'],key)}\n\n{ht}{fol}"):posted.add(f"kickoff_{key}")
-  # GOAL - score increased
   if prev and (hg>ph or ag>pa) and f"goal_{key}_{ss}" not in posted:
    eid=espn_id(lk,nk,d);sc=scorer(lk,eid) if eid else None;sm=goal_c(h,a,hg,ag,ph,pa,ms)
    txt=f"🟢 GOAL {ms}!\n\n🔥 {h} {ss} {a}\n⚽ {sc} ({ms})\n🏆 {ln}\n\n{sm}\n\n{pick(['Who scores next? 👇','Was it a foul? YES or NO 👇','Tag a friend who needs to see this goal! 👇'],key)}\n\n{ht}{fol}" if sc else f"🟢 GOAL {ms}!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{sm}\n\n{pick(['Who scores next? 👇','Was it a foul? YES or NO 👇','Tag a friend who needs to see this goal! 👇'],key)}\n\n{ht}{fol}"
    if fb(txt):posted.add(f"goal_{key}_{ss}")
-  # RED / PENALTY / VAR
   if st in ["in","ht"]:
    eid=espn_id(lk,nk,d)
    if eid:
@@ -153,11 +175,11 @@ def main():
      elif ev["type"]=="penalty_miss":m=f"❌ PENALTY MISSED {ev['minute']}!\n\n🔥 {h} {ss} {a}\n👤 {ev['athlete']} misses!\n🏆 {ln}\n\nHUGE MISS! Will it cost them? 👇\n\n{ht}{fol}"
      elif ev["type"]=="var":m=f"📺 VAR CHECK {ev['minute']}!\n\n🔥 {h} {ss} {a}\n{ev['text']}\n🏆 {ln}\n\nVAR... Love it or hate it? 👇\n\n{ht}{fol}"
      if m and fb(m):posted.add(ek);nev[ek]=True
-  # HT - in -> ht
-  if st=="ht" and ps=="in" and f"ht_{key}_{ss}" not in posted:
+  # FIXED: HT also fires if first seen at HT
+  if st=="ht" and ps in ["in",None] and f"ht_{key}_{ss}" not in posted:
    if fb(f"⏸️ HALF TIME!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{ht_c(h,a,hg,ag)}\n\n{ht}{fol}"):posted.add(f"ht_{key}_{ss}")
-  # FT - in/ht -> post ONLY
-  if st=="post" and ps in ["in","ht","pre"] and f"ft_{key}_{ss}" not in posted:
+  # FIXED: FT also fires if first seen at FT
+  if st=="post" and ps in ["in","ht","pre",None] and f"ft_{key}_{ss}" not in posted:
    if fb(f"✅ FULL TIME!\n\n🔥 {h} {ss} {a}\n🏆 {ln}\n\n{ft_c(h,a,hg,ag,ph if prev else None,pa if prev else None)}\n\n{ht}{fol}"):posted.add(f"ft_{key}_{ss}")
- save(POSTED_FILE,list(posted)[-5000:]);save(SCORES_FILE,new);save(EVENTS_FILE,{**lev,**nev});print(f"V84 DONE - {len(posted)} posted")
+ save(POSTED_FILE,list(posted)[-5000:]);save(SCORES_FILE,new);save(EVENTS_FILE,{**lev,**nev});print(f"V85 DONE - {len(posted)} posted")
 if __name__=="__main__":main()

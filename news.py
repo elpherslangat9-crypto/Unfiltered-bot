@@ -1,6 +1,6 @@
-import os,requests,json,hashlib
+import os,requests,json,hashlib,random
 from datetime import datetime,timedelta,timezone
-from PIL import Image,ImageDraw,ImageFont,ImageFilter,ImageEnhance
+from PIL import Image,ImageDraw,ImageFont,ImageFilter
 FB_TOKEN=os.getenv("FB_TOKEN");FB_PAGE_ID=os.getenv("FB_PAGE_ID") or "1293090263895541";EAT=timezone(timedelta(hours=3));now_eat=datetime.now(EAT);today=now_eat.strftime("%Y-%m-%d");today_param=now_eat.strftime("%Y%m%d");HASH_FILE="posted_bot.json";TIPS_FILE="today_tips.json"
 def load_set(p):
  try:
@@ -19,7 +19,60 @@ def save_tips(new_picks):
  for g in new_picks:d["tips"][f"{g['home']} vs {g['away']}"]={"tip":g["tip"],"odds":g["odds"],"time":g["time"]}
  with open(TIPS_FILE,"w") as f:json.dump(d,f)
 LEAGUES={"eng.1":"EPL","eng.2":"CHAMP","esp.1":"LaLiga","ita.1":"Serie A","ger.1":"Bundesliga","fra.1":"Ligue 1","ned.1":"Eredivisie","por.1":"Primeira","uefa.champions":"UCL","uefa.europa":"UEL","tur.1":"Super Lig"}
-FLAGS={"eng.1":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","eng.2":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","esp.1":"🇪🇸","ita.1":"🇮🇹","ger.1":"🇩🇪","fra.1":"🇫🇷","ned.1":"🇳🇱","por.1":"🇵🇹","uefa.champions":"🇪🇺","uefa.europa":"🇪🇺","tur.1":"🇹🇷"}
+# FIXED: NO FLAG EMOJIS - Pillow cannot draw them, they become boxes. Use text tag instead.
+# FIXED: Short names to stop overlap
+SHORT_NAMES={"West Ham United":"West Ham","Wolverhampton Wanderers":"Wolves","Tottenham Hotspur":"Spurs","Manchester United":"Man Utd","Manchester City":"Man City","Nottingham Forest":"Nottm Forest","Borussia Dortmund":"Dortmund","Borussia Monchengladbach":"Gladbach","Real Betis":"Betis","Real Sociedad":"Sociedad","Athletic Club":"Athletic","Stade Rennais":"Rennes","Olympiacos":"Olympiacos","Middlesbrough":"Middlesboro"}
+def short_name(n):
+ n=SHORT_NAMES.get(n,n)
+ n=n.replace("Borussia ","").replace("FC ","")
+ return n[:16]
+def pick(lst,key):
+ h=sum(ord(c) for c in str(key))%len(lst);return lst[h]
+def get_hashtags(slip):
+ base="#UnfilteredScores #LiveScores #FootballLive #FYP #ForYou #Viral #Trending #ExplorePage #NonFollowers #FootballTikTok #SoccerFans #FollowForMore"
+ extra="#FootballTips #BettingTips #FreeTips #BettingCommunity #TodayTips" if slip!="RESULTS" else "#BOOM #Results #HonestTips"
+ return f"{base} {extra} #{slip.replace(' ','')}"
+# SMART CAPTIONS - ROTATE EVERY DAY, NEVER REPEAT, WIN + LOSE FAMILY VIBE
+def get_preview_caption(slip,total,picked,desc):
+ hashtags=get_hashtags(slip)
+ intros=[
+  f"Let's try today... {len(picked)} games, 1 ticket. Are you riding with us?",
+  f"New day, new slip. Yesterday is gone, today we go again. Who is with me?",
+  f"No pressure, just vibes. Let's try today, if it hits we celebrate together.",
+  f"Today's slip is ready. Small stake, big dream. Who is trying with us?",
+  f"Green Family, let's go again! Today we try, tomorrow we talk. Are you in?",
+ ]
+ intro=pick(intros, f"{today}_{slip}")
+ middles=[
+  "If it hits, we BOOM together. If it misses, we go again tomorrow. That's family.",
+  "No one wins every day. We play smart, we stay together.",
+  "Don't chase, don't stress. Enjoy the games with us.",
+  "Win or lose, we are here tomorrow again. That's the promise.",
+ ]
+ middle=pick(middles, f"{today}_{slip}_mid")
+ return f"🔥 {slip} - {now_eat.strftime('%H:%M')} EAT\n\n✅ {desc}\n💰 Total Odds: {total:.2f} | {len(picked)} Games\n\n{intro}\n\n{middle}\n\nWho is riding? Comment YES 👇\n\nFollow @Unfiltered Scores 🔔 Turn ON notifications - You will miss BOOM if you don't!\n\n{hashtags}"
+def get_results_caption(w,f,tot):
+ hashtags=get_hashtags("RESULTS")
+ if f==0: return f"✅ Results - Waiting...\n\nFollow for tomorrow's slips! 💚\n\n{hashtags}"
+ win_rate=w/f if f else 0
+ if win_rate>=0.7:
+  msg=pick([
+   f"BOOM! {w}/{f} WIN! We did it TOGETHER! Who cashed out? Show your ticket 👇",
+   f"WHAT A DAY! {w}/{f}! Green Family, we ate today! Who won? 👇",
+   f"BOOM BOOM! {w}/{f} WIN! This is why we never give up! Tag a friend who doubted us 👇",
+  ], f"{today}_win")
+ elif win_rate>=0.4:
+  msg=pick([
+   f"{w}/{f} today. Not perfect, but we fought. We go again tomorrow, stronger.",
+   f"Half win, half lesson. {w}/{f}. We learn, we go again tomorrow. Who is still here? 👇",
+  ], f"{today}_mid")
+ else:
+  msg=pick([
+   f"We missed today... {w}/{f}. It's okay, we go again tomorrow. No one wins every day. Who is STILL HERE? Comment STILL HERE 💚",
+   f"Tough day, {w}/{f}. Sorry Family. Tomorrow we try again. We don't quit. Are you still with us? 👇",
+   f"Today was not our day. {w}/{f}. But family doesn't leave on a bad day. Tomorrow we bounce back. Comment WE GO AGAIN 💚",
+  ], f"{today}_lose")
+ return f"✅ Unfiltered Scores - Results\n\n🔥 {msg}\n💰 Total Odds: {tot:.2f}\n\nFollow for tomorrow's slips! 💚\n\n{hashtags}"
 def fb_post_photo(path,caption):
  try:
   url=f"https://graph.facebook.com/v20.0/{FB_PAGE_ID}/photos"
@@ -68,7 +121,7 @@ def get_all_games():
     if ke.strftime("%Y-%m-%d")!=today:continue
     comps=ev.get("competitions",[{}])[0].get("competitors",[])
     if len(comps)<2:continue
-    hc=comps[0] if comps[0].get("homeAway")=="home" else comps[1];ac=comps[1] if comps[0].get("homeAway")=="home" else comps[0];state=ev.get("status",{}).get("type",{}).get("state");hg=int(hc.get("score",0));ag=int(ac.get("score",0));games.append({"time":ke.strftime("%H:%M"),"kickoff":ke,"home":hc["team"]["displayName"],"home_id":hc["team"]["id"],"away":ac["team"]["displayName"],"away_id":ac["team"]["id"],"league":lg,"flag":FLAGS[lg],"state":state,"hg":hg,"ag":ag})
+    hc=comps[0] if comps[0].get("homeAway")=="home" else comps[1];ac=comps[1] if comps[0].get("homeAway")=="home" else comps[0];state=ev.get("status",{}).get("type",{}).get("state");hg=int(hc.get("score",0));ag=int(ac.get("score",0));games.append({"time":ke.strftime("%H:%M"),"kickoff":ke,"home":hc["team"]["displayName"],"home_id":hc["team"]["id"],"away":ac["team"]["displayName"],"away_id":ac["team"]["id"],"league":lg,"league_tag":LEAGUES[lg],"state":state,"hg":hg,"ag":ag})
   except:continue
  return sorted(games,key=lambda x:x["kickoff"])
 def build_morning(games):
@@ -115,25 +168,28 @@ def check_win(tip,hg,ag):
  d={"1":hg>ag,"1X":hg>=ag,"X2":ag>=hg,"Over 1.5":(hg+ag)>1.5,"Over 2.5":(hg+ag)>2.5,"BTTS":hg>0 and ag>0,"1 & Over 1.5":hg>ag and (hg+ag)>1.5,"1 & Over 2.5":hg>ag and (hg+ag)>2.5,"1X & Over 1.5":hg>=ag and (hg+ag)>1.5,"X2 & Over 1.5":ag>=hg and (hg+ag)>1.5,"1X & BTTS":hg>=ag and hg>0 and ag>0,"Double Chance 12":hg!=ag};return d.get(tip,False)
 def draw_slip_table(games,total,slip_name,mode="PREVIEW"):
  SCALE=2;W=1080*SCALE;ROW_H=82*SCALE;HEADER_H=95*SCALE;SUB_H=68*SCALE;FOOTER_H=95*SCALE;H=HEADER_H+SUB_H+ROW_H*len(games)+FOOTER_H+40*SCALE;img=Image.new("RGB",(W,H),(240,244,250));d=ImageDraw.Draw(img)
- try:f_title=ImageFont.truetype("DejaVuSans-Bold.ttf",42*SCALE);f_head=ImageFont.truetype("DejaVuSans-Bold.ttf",27*SCALE);f_cell=ImageFont.truetype("DejaVuSans-Bold.ttf",28*SCALE);f_small=ImageFont.truetype("DejaVuSans.ttf",26*SCALE);f_footer=ImageFont.truetype("DejaVuSans-Bold.ttf",34*SCALE)
+ try:f_title=ImageFont.truetype("DejaVuSans-Bold.ttf",42*SCALE);f_head=ImageFont.truetype("DejaVuSans-Bold.ttf",27*SCALE);f_cell=ImageFont.truetype("DejaVuSans-Bold.ttf",26*SCALE);f_small=ImageFont.truetype("DejaVuSans.ttf",24*SCALE);f_footer=ImageFont.truetype("DejaVuSans-Bold.ttf",32*SCALE)
  except:f_title=ImageFont.load_default();f_head=f_title;f_cell=f_title;f_small=f_title;f_footer=f_title
  BLUE=(11,94,215);LIGHT=(175,195,240);WHITE=(255,255,255);GREEN=(0,145,65);d.rounded_rectangle([18*SCALE,15*SCALE,W-18*SCALE,HEADER_H],radius=28*SCALE,fill=BLUE);d.text((W//2,(HEADER_H+15*SCALE)//2),"Unfiltered Scores",font=f_title,fill="white",anchor="mm");y0=HEADER_H+12*SCALE;d.rounded_rectangle([18*SCALE,y0,W-18*SCALE,y0+SUB_H],radius=18*SCALE,fill=BLUE)
- cols=[("TIME",60*SCALE),("FIXTURE",220*SCALE),("TIP",670*SCALE),("ODDS",850*SCALE)] if mode=="PREVIEW" else [("TIME",45*SCALE),("FIXTURE",175*SCALE),("TIP",600*SCALE),("ODDS",760*SCALE),("RESULT/SCORE",870*SCALE)]
+ # FIXED COLUMNS - Fixture wider, Tip further right, no overlap
+ cols=[("TIME",50*SCALE),("FIXTURE",200*SCALE),("TIP",720*SCALE),("ODDS",920*SCALE)] if mode=="PREVIEW" else [("TIME",40*SCALE),("FIXTURE",170*SCALE),("TIP",640*SCALE),("ODDS",800*SCALE),("RESULT",920*SCALE)]
  for txt,x in cols:d.text((x,y0+SUB_H//2),txt,font=f_head,fill="white",anchor="lm")
  y=y0+SUB_H;wins=0;finished=0
  for i,g in enumerate(games):
-  fill=LIGHT if i%2==1 else WHITE;d.rectangle([18*SCALE,y,W-18*SCALE,y+ROW_H],fill=fill);hs=g["home"].replace("Borussia ","").replace("FC ","")[:13];aw=g["away"].replace("Borussia ","").replace("FC ","")[:13]
-  if mode=="PREVIEW":d.text((60*SCALE,y+ROW_H//2),g["time"],font=f_cell,fill="black",anchor="lm");d.text((220*SCALE,y+ROW_H//2),f"{g['flag']} {hs} - {aw}",font=f_small,fill="black",anchor="lm");d.text((670*SCALE,y+ROW_H//2),g["tip"],font=f_cell,fill="black",anchor="lm");d.text((850*SCALE,y+ROW_H//2),g["odds"],font=f_cell,fill="black",anchor="lm")
+  fill=LIGHT if i%2==1 else WHITE;d.rectangle([18*SCALE,y,W-18*SCALE,y+ROW_H],fill=fill);hs=short_name(g["home"]);aw=short_name(g["away"]);fixture=f"[{g.get('league_tag','')}] {hs} - {aw}"
+  # Safety: if still too long, cut away team
+  if len(fixture)>32: fixture=f"[{g.get('league_tag','')}] {hs} - {aw[:10]}"
+  if mode=="PREVIEW":d.text((50*SCALE,y+ROW_H//2),g["time"],font=f_cell,fill="black",anchor="lm");d.text((200*SCALE,y+ROW_H//2),fixture,font=f_small,fill="black",anchor="lm");d.text((720*SCALE,y+ROW_H//2),g["tip"],font=f_cell,fill="black",anchor="lm");d.text((920*SCALE,y+ROW_H//2),g["odds"],font=f_cell,fill="black",anchor="lm")
   else:
    if "tip" not in g:g["tip"],g["odds"]=("1","1.30")
-   d.text((45*SCALE,y+ROW_H//2),g["time"],font=f_cell,fill="black",anchor="lm");d.text((175*SCALE,y+ROW_H//2),f"{g['flag']} {hs} - {aw}",font=f_small,fill="black",anchor="lm");d.text((600*SCALE,y+ROW_H//2),g["tip"],font=f_cell,fill="black",anchor="lm");d.text((760*SCALE,y+ROW_H//2),g["odds"],font=f_cell,fill="black",anchor="lm")
+   d.text((40*SCALE,y+ROW_H//2),g["time"],font=f_cell,fill="black",anchor="lm");d.text((170*SCALE,y+ROW_H//2),fixture,font=f_small,fill="black",anchor="lm");d.text((640*SCALE,y+ROW_H//2),g["tip"],font=f_cell,fill="black",anchor="lm");d.text((800*SCALE,y+ROW_H//2),g["odds"],font=f_cell,fill="black",anchor="lm")
    if g["state"]=="post":
-    finished+=1;is_win=check_win(g["tip"],g["hg"],g["ag"]);wins+=1 if is_win else 0;res=f"{g['hg']}-{g['ag']} {'✅ WIN' if is_win else '❌ LOST'}";color=(0,145,65) if is_win else (200,0,0);d.text((870*SCALE,y+ROW_H//2),res,font=f_cell,fill=color,anchor="lm")
-   else:d.text((870*SCALE,y+ROW_H//2),"⏳",font=f_cell,fill="black",anchor="lm")
+    finished+=1;is_win=check_win(g["tip"],g["hg"],g["ag"]);wins+=1 if is_win else 0;res=f"{g['hg']}-{g['ag']} {'WIN' if is_win else 'LOST'}";color=(0,145,65) if is_win else (200,0,0);d.text((920*SCALE,y+ROW_H//2),res,font=f_cell,fill=color,anchor="lm")
+   else:d.text((920*SCALE,y+ROW_H//2),"LIVE",font=f_cell,fill="black",anchor="lm")
   y+=ROW_H
  fy=y+12*SCALE
- if mode=="PREVIEW":d.rounded_rectangle([18*SCALE,fy,W-18*SCALE,fy+FOOTER_H],radius=25*SCALE,fill=BLUE);footer=f"{slip_name} - TOTAL ODDS {total:.2f} 💚"
- else:d.rounded_rectangle([18*SCALE,fy,W-18*SCALE,fy+FOOTER_H],radius=25*SCALE,fill=GREEN);footer=f"BOOM {wins}/{len(games)} ✅ - TOTAL ODDS {total:.2f}" if finished==len(games) and finished>0 else f"{wins}/{finished} WIN SO FAR - TOTAL ODDS {total:.2f}"
+ if mode=="PREVIEW":d.rounded_rectangle([18*SCALE,fy,W-18*SCALE,fy+FOOTER_H],radius=25*SCALE,fill=BLUE);footer=f"{slip_name} - TOTAL ODDS {total:.2f}"
+ else:d.rounded_rectangle([18*SCALE,fy,W-18*SCALE,fy+FOOTER_H],radius=25*SCALE,fill=GREEN);footer=f"BOOM {wins}/{len(games)} - TOTAL ODDS {total:.2f}" if finished==len(games) and finished>0 else f"{wins}/{finished} WIN SO FAR - TOTAL ODDS {total:.2f}"
  d.text((W//2,fy+FOOTER_H//2),footer,font=f_footer,fill="white",anchor="mm");img_small=img.resize((1080,H//SCALE),Image.LANCZOS);img_small=img_small.filter(ImageFilter.UnsharpMask(radius=2,percent=60,threshold=3));out=f"slip_{slip_name.lower().replace(' ','_')}_{mode.lower()}.png";img_small.save(out,"PNG",optimize=True);return out,wins,finished,total
 def main():
  hashes=load_set(HASH_FILE);hm=now_eat.hour*60+now_eat.minute;print(f"Bot run at {now_eat.strftime('%H:%M')} EAT, Today {today}");slip=None
@@ -151,7 +207,7 @@ def main():
    print(f"Picked {len(picked)} games, Total {total:.2f} - POSTING, never skip");key="|".join([f"{g['time']}{g['home']}{g['away']}{g['tip']}" for g in picked]);h=hashlib.md5(f"{today}_{slip}_{key}".encode()).hexdigest()
    if h in hashes:print(f"Same {slip} already posted - SKIP")
    else:
-    path,w,f,t=draw_slip_table(picked,total,slip,mode="PREVIEW");lines="\n".join([f"⏰ {g['time']} | {g['home']} vs {g['away']} | {g['tip']} @ {g['odds']}" for g in picked]);caption=f"🔥 {slip} - {now_eat.strftime('%H:%M')} EAT\n\n✅ {desc}\n💰 Total Odds: {total:.2f} | {len(picked)} Games\n\n{lines}\n\nAnalyzed: Table + Form (Last 5) + Goals + H2H + Home\n\nGood luck Green Family! 💚\n\n#UnfilteredScores #{slip.replace(' ','')} #FYP";post_id=fb_post_photo(path,caption)
+    path,w,f,t=draw_slip_table(picked,total,slip,mode="PREVIEW");caption=get_preview_caption(slip,total,picked,desc);post_id=fb_post_photo(path,caption)
     if post_id:hashes.add(h);save_set(HASH_FILE,hashes);save_tips(picked);print(f"POSTED {slip} - DONE + TIPS SAVED")
  elif slip=="RESULTS":
   games=get_all_games();finished_games=[g for g in games if g["state"]=="post"]
@@ -176,7 +232,7 @@ def main():
     if h not in hashes:
      tot=1.0
      for p in results_picked:tot*=float(p["odds"])
-     path,w,f,t=draw_slip_table(results_picked,tot,"RESULTS",mode="RESULTS");caption=f"✅ Unfiltered Scores - Results\n\n🔥 BOOM {w}/{f} WIN\n💰 Total Odds: {tot:.2f}\n\nFollow for tomorrow's slips! 💚\n\n#UnfilteredScores #BOOM #FYP";post_id=fb_post_photo(path,caption)
+     path,w,f,t=draw_slip_table(results_picked,tot,"RESULTS",mode="RESULTS");caption=get_results_caption(w,f,tot);post_id=fb_post_photo(path,caption)
      if post_id:hashes.add(h);save_set(HASH_FILE,hashes);print("POSTED RESULTS - DONE - HONEST BOOM")
     else:print("Results already posted")
 if __name__=="__main__":main()

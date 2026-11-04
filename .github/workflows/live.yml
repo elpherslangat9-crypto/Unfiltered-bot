@@ -1,4 +1,4 @@
-name: V75 Pure Livescore Live Bot
+name: V82 Smart Live Bot
 
 on:
   schedule:
@@ -12,7 +12,7 @@ concurrency:
 jobs:
   live:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5  # FIXED: Was 3, now 5 - busy Saturday needs it
 
     steps:
       - name: Checkout code
@@ -36,10 +36,10 @@ jobs:
       - name: Show previous data
         run: |
           echo "--- POSTED ---"
-          ls -lh posted.json last_scores.json || echo "First run - no files yet"
+          ls -lh posted.json last_scores.json last_events.json || echo "First run - no files yet"
           wc -l posted.json 2>/dev/null || true
 
-      - name: Run V75 Bot
+      - name: Run V82 Bot
         env:
           FB_TOKEN: ${{ secrets.FB_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
@@ -52,5 +52,6 @@ jobs:
           path: |
             posted.json
             last_scores.json
+            last_events.json
           retention-days: 90
           if-no-files-found: error

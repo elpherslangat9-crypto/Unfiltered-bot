@@ -1,13 +1,23 @@
 import os,requests,json,hashlib
 from datetime import datetime,timedelta,timezone
 from PIL import Image,ImageDraw,ImageFont,ImageFilter,ImageEnhance
-FB_TOKEN=os.getenv("FB_TOKEN");FB_PAGE_ID=os.getenv("FB_PAGE_ID") or "1293090263895541";EAT=timezone(timedelta(hours=3));now_eat=datetime.now(EAT);today=now_eat.strftime("%Y-%m-%d");today_param=now_eat.strftime("%Y%m%d");HASH_FILE="posted_bot.json"
+FB_TOKEN=os.getenv("FB_TOKEN");FB_PAGE_ID=os.getenv("FB_PAGE_ID") or "1293090263895541";EAT=timezone(timedelta(hours=3));now_eat=datetime.now(EAT);today=now_eat.strftime("%Y-%m-%d");today_param=now_eat.strftime("%Y%m%d");HASH_FILE="posted_bot.json";TIPS_FILE="today_tips.json"
 def load_set(p):
  try:
   with open(p) as f:return set(json.load(f))
  except:return set()
 def save_set(p,d):
  with open(p,"w") as f:json.dump(list(d)[-1000:],f)
+def load_tips():
+ try:
+  with open(TIPS_FILE) as f:d=json.load(f)
+  if d.get("date")!=today:return {}
+  return d.get("tips",{})
+ except:return {}
+def save_tips(new_picks):
+ d={"date":today,"tips":load_tips()}
+ for g in new_picks:d["tips"][f"{g['home']} vs {g['away']}"]={"tip":g["tip"],"odds":g["odds"],"time":g["time"]}
+ with open(TIPS_FILE,"w") as f:json.dump(d,f)
 LEAGUES={"eng.1":"EPL","eng.2":"CHAMP","esp.1":"LaLiga","ita.1":"Serie A","ger.1":"Bundesliga","fra.1":"Ligue 1","ned.1":"Eredivisie","por.1":"Primeira","uefa.champions":"UCL","uefa.europa":"UEL","tur.1":"Super Lig"}
 FLAGS={"eng.1":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","eng.2":"🏴󐁧󐁢󐁥󐁮󐁧󐁿","esp.1":"🇪🇸","ita.1":"🇮🇹","ger.1":"🇩🇪","fra.1":"🇫🇷","ned.1":"🇳🇱","por.1":"🇵🇹","uefa.champions":"🇪🇺","uefa.europa":"🇪🇺","tur.1":"🇹🇷"}
 def fb_post_photo(path,caption):
@@ -36,7 +46,7 @@ def get_standings_cached(league):
  STANDINGS_CACHE[league]=table;return table
 def get_form(team_id,league):
  try:
-  url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule?season=2026";r=requests.get(url,timeout=8,headers={"User-Agent":"Mozilla/5.0"});events=r.json().get("events",[])[-6:-1];pts=0;gf=0;ga=0
+  url=f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/teams/{team_id}/schedule?season=2026";r=requests.get(url,timeout=8,headers={"User-Agent":"Mozilla/5.0"});events=r.json().get("events",[])[-5:];pts=0;gf=0;ga=0
   for ev in events:
    comps=ev.get("competitions",[{}])[0].get("competitors",[])
    if len(comps)<2:continue
@@ -46,7 +56,7 @@ def get_form(team_id,league):
   return pts,gf,ga
  except:return 7,5,5
 def analyze(home_id,away_id,home_name,away_name,league):
- st=get_standings_cached(league);hp=st.get(str(home_id),{}).get("pos",10);ap=st.get(str(away_id),{}).get("pos",10);h_pts,h_gf,h_ga=get_form(home_id,league);a_pts,a_gf,a_ga=get_form(away_id,league);ts=max(-20,min(30,(ap-hp)*3));fs=max(-20,min(25,(h_pts-a_pts)*2));gs=10 if h_gf>=7 else 0;ha=15 if hp<=12 else 5;big=["Real Madrid","Barcelona","Bayern","Man City","Arsenal","Liverpool","Porto","PSV","Inter","Juventus","PSG","Chelsea","Dortmund","AC Milan"];h2h=10 if home_name in big and away_name not in big else 0;total=max(0,min(98,40+ts+fs+ha+h2h+gs));avg_g=(h_gf+a_gf)/5 if (h_gf+a_gf)>0 else 2.2;return total,f"Pos {hp}vs{ap} | Form {h_pts}vs{a_pts}pts",avg_g,h_pts,a_pts
+ st=get_standings_cached(league);hp=st.get(str(home_id),{}).get("pos",10);ap=st.get(str(away_id),{}).get("pos",10);h_pts,h_gf,h_ga=get_form(home_id,league);a_pts,a_gf,a_ga=get_form(away_id,league);ts=max(-20,min(30,(ap-hp)*3));fs=max(-20,min(25,(h_pts-a_pts)*2));gs=10 if h_gf>=7 else 0;ha=15 if hp<=12 else 5;big=["Real Madrid","Barcelona","Bayern","Man City","Arsenal","Liverpool","Porto","PSV","Inter","Juventus","PSG","Chelsea","Dortmund","AC Milan"];h2h=10 if home_name in big and away_name not in big else 0;total=max(0,min(98,40+ts+fs+ha+h2h+gs));avg_g=(h_gf+a_gf)/10 if (h_gf+a_gf)>0 else 2.2;return total,f"Pos {hp}vs{ap} | Form {h_pts}vs{a_pts}pts",avg_g,h_pts,a_pts
 def get_all_games():
  games=[]
  for lg in LEAGUES.keys():
@@ -142,27 +152,31 @@ def main():
    if h in hashes:print(f"Same {slip} already posted - SKIP")
    else:
     path,w,f,t=draw_slip_table(picked,total,slip,mode="PREVIEW");lines="\n".join([f"⏰ {g['time']} | {g['home']} vs {g['away']} | {g['tip']} @ {g['odds']}" for g in picked]);caption=f"🔥 {slip} - {now_eat.strftime('%H:%M')} EAT\n\n✅ {desc}\n💰 Total Odds: {total:.2f} | {len(picked)} Games\n\n{lines}\n\nAnalyzed: Table + Form (Last 5) + Goals + H2H + Home\n\nGood luck Green Family! 💚\n\n#UnfilteredScores #{slip.replace(' ','')} #FYP";post_id=fb_post_photo(path,caption)
-    if post_id:hashes.add(h);save_set(HASH_FILE,hashes);print(f"POSTED {slip} - DONE")
+    if post_id:hashes.add(h);save_set(HASH_FILE,hashes);save_tips(picked);print(f"POSTED {slip} - DONE + TIPS SAVED")
  elif slip=="RESULTS":
   games=get_all_games();finished_games=[g for g in games if g["state"]=="post"]
   if len(finished_games)>=3:
-   results_picked=[]
+   saved=load_tips();results_picked=[]
    for g in finished_games:
-    score,reason,avg_g,h_pts,a_pts=analyze(g["home_id"],g["away_id"],g["home"],g["away"],g["league"])
-    if score>=90:tip,odds="1","1.30"
-    elif score>=85 and avg_g>=2.5:tip,odds="1 & Over 2.5","2.10"
-    elif score>=80:tip,odds="1X & Over 1.5","1.55"
-    elif score>=75 and avg_g>=2.5:tip,odds="Over 2.5","1.85"
-    elif score>=70:tip,odds="BTTS","1.75"
-    elif score>=65:tip,odds="X2 & Over 1.5","1.65"
-    else:tip,odds="Double Chance 12","1.28"
-    g["tip"]=tip;g["odds"]=odds;results_picked.append(g)
+    key2=f"{g['home']} vs {g['away']}"
+    if key2 in saved:g["tip"]=saved[key2]["tip"];g["odds"]=saved[key2]["odds"]
+    else:
+     score,reason,avg_g,h_pts,a_pts=analyze(g["home_id"],g["away_id"],g["home"],g["away"],g["league"])
+     if score>=90:tip,odds="1","1.30"
+     elif score>=85 and avg_g>=2.5:tip,odds="1 & Over 2.5","2.10"
+     elif score>=80:tip,odds="1X & Over 1.5","1.55"
+     elif score>=75 and avg_g>=2.5:tip,odds="Over 2.5","1.85"
+     elif score>=70:tip,odds="BTTS","1.75"
+     elif score>=65:tip,odds="X2 & Over 1.5","1.65"
+     else:tip,odds="Double Chance 12","1.28"
+     g["tip"]=tip;g["odds"]=odds
+    results_picked.append(g)
    if results_picked:
     key="|".join([f"{g['time']}{g['home']}{g['away']}{g['state']}{g['hg']}-{g['ag']}" for g in results_picked]);h=hashlib.md5(f"{today}_RESULTS_{key}".encode()).hexdigest()
     if h not in hashes:
      tot=1.0
      for p in results_picked:tot*=float(p["odds"])
      path,w,f,t=draw_slip_table(results_picked,tot,"RESULTS",mode="RESULTS");caption=f"✅ Unfiltered Scores - Results\n\n🔥 BOOM {w}/{f} WIN\n💰 Total Odds: {tot:.2f}\n\nFollow for tomorrow's slips! 💚\n\n#UnfilteredScores #BOOM #FYP";post_id=fb_post_photo(path,caption)
-     if post_id:hashes.add(h);save_set(HASH_FILE,hashes);print("POSTED RESULTS - DONE")
+     if post_id:hashes.add(h);save_set(HASH_FILE,hashes);print("POSTED RESULTS - DONE - HONEST BOOM")
     else:print("Results already posted")
 if __name__=="__main__":main()
